@@ -19,6 +19,16 @@ struct TerminalView: View {
     @State private var username = ""
     @State private var password = ""
 
+    // 新增：支持用已保存的服务器信息初始化
+    init(server: ServerItem? = nil) {
+        if let server {
+            _host = State(initialValue: server.host)
+            _port = State(initialValue: String(server.port))
+            _username = State(initialValue: server.username)
+            _password = State(initialValue: server.password)
+        }
+    }
+
     var body: some View {
         ZStack {
             Color.black
@@ -256,10 +266,6 @@ struct TerminalView: View {
     }
 
     // MARK: - Single Output Line
-    //
-    // 注意：
-    // 这里明确返回 AnyView，避免 SwiftUI 的
-    // "opaque return type" 推断问题。
 
     private func outputLine(
         line: String,
@@ -354,7 +360,6 @@ struct TerminalView: View {
             return nil
         }
 
-        // Shell prompt 不当成 Key/Value
         if trimmed.contains("@"),
            (
                 trimmed.hasSuffix("#") ||
@@ -363,7 +368,6 @@ struct TerminalView: View {
             return nil
         }
 
-        // URL 本身不当成 Key/Value
         if trimmed.hasPrefix("http://") ||
            trimmed.hasPrefix("https://") {
             return nil
@@ -421,68 +425,43 @@ struct TerminalView: View {
             )
 
         let allowedKeys: Set<String> = [
-
-            // English
             "username",
             "user",
             "login",
-
             "password",
             "passwd",
             "pass",
-
             "private key",
             "public key",
             "key",
-
             "secret",
-
             "token",
             "access token",
-
             "api key",
             "api secret",
-
             "uuid",
             "id",
-
             "address",
-
             "host",
             "hostname",
-
             "port",
-
             "url",
             "endpoint",
-
             "server",
             "domain",
-
             "email",
-
-            // Chinese
             "用户名",
             "用户",
             "登录名",
-
             "密码",
-
             "私钥",
             "公钥",
             "密钥",
-
             "令牌",
-            "token",
-
-            "uuid",
             "地址",
-
             "主机",
             "服务器",
-
             "端口",
-
             "域名",
             "链接"
         ]
@@ -590,14 +569,6 @@ struct TerminalView: View {
 
                 quickButton("ip") {
                     runCommand("ip addr")
-                }
-
-                quickButton("x-ui") {
-                    runCommand("x-ui")
-                }
-
-                quickButton("88") {
-                    runCommand("bash <(curl -Ls https://raw.githubusercontent.com/FranzKafkaYu/x-ui/master/install.sh)")
                 }
             }
             .padding(.horizontal, 8)
@@ -998,24 +969,6 @@ struct TerminalView: View {
         guard !value.isEmpty else {
             return
         }
-
-        /*
-         核心修复：
-
-         commandIsRunning == true
-             ↓
-         当前远程程序正在等待输入
-             ↓
-         不创建新的 CommandHistoryItem
-             ↓
-         直接把输入发送给当前 PTY
-             ↓
-         read / passwd / apt / x-ui 等继续执行
-
-         commandIsRunning == false
-             ↓
-         才创建新的命令历史块
-        */
 
         session.submitInput(value)
 

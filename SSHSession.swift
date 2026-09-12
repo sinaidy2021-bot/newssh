@@ -1,9 +1,15 @@
 import Foundation
 import Citadel
 
+struct CommandHistoryItem: Identifiable {
+    let id = UUID()
+    let command: String
+    var output: String
+}
+
 class SSHSession: ObservableObject {
     @Published var isConnected: Bool = false
-    @Published var terminalOutput: String = ""
+    @Published var history: [CommandHistoryItem] = []
     
     private var client: SSHClient?
     
@@ -30,7 +36,6 @@ class SSHSession: ObservableObject {
 
     func connect() {
         guard !isConnected else { return }
-        self.terminalOutput = "正在连接到服务器...\n"
         
         Task {
             do {
@@ -45,11 +50,11 @@ class SSHSession: ObservableObject {
                 await MainActor.run {
                     self.client = client
                     self.isConnected = true
-                    self.terminalOutput += "连接成功！\n$ "
+                    self.history.append(CommandHistoryItem(command: "system", output: "连接成功！"))
                 }
             } catch {
                 await MainActor.run {
-                    self.terminalOutput += "连接失败: \(error.localizedDescription)\n"
+                    self.history.append(CommandHistoryItem(command: "system", output: "连接失败: \(error.localizedDescription)"))
                 }
             }
         }
@@ -57,34 +62,36 @@ class SSHSession: ObservableObject {
 
     func sendCommand(_ command: String) {
         guard isConnected, let client = self.client else {
-            self.terminalOutput += "错误: 未建立连接\n"
+            self.history.append(CommandHistoryItem(command: command, output: "错误: 未建立连接"))
             return
         }
 
         let cmdToSend = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cmdToSend.isEmpty else { return }
 
+        // 先向列表添加一条“执行中”的占位记录
+        let index = history.count
+        DispatchQueue.main.async {
+            self.history.append(CommandHistoryItem(command: cmdToSend, output: "执行中..."))
+        }
+
         Task {
             do {
-                // 执行命令并转为字符串
                 let output = try await client.executeCommand(cmdToSend)
                 let result = String(buffer: output)
-                
                 let cleaned = cleanANSI(result)
+                let finalOutput = cleaned.isEmpty ? "(命令已执行，无输出)" : cleaned
+                
                 await MainActor.run {
-                    if !cleaned.isEmpty {
-                        self.terminalOutput += cleaned
-                    } else {
-                        self.terminalOutput += "(命令已执行，无输出)\n"
+                    if self.history.indices.contains(index) {
+                        self.history[index].output = finalOutput
                     }
-                    if !self.terminalOutput.hasSuffix("\n") {
-                        self.terminalOutput += "\n"
-                    }
-                    self.terminalOutput += "$ "
                 }
             } catch {
                 await MainActor.run {
-                    self.terminalOutput += "执行出错: \(error.localizedDescription)\n$ "
+                    if self.history.indices.contains(index) {
+                        self.history[index].output = "执行出错: \(error.localizedDescription)"
+                    }
                 }
             }
         }
@@ -96,7 +103,7 @@ class SSHSession: ObservableObject {
             await MainActor.run {
                 self.client = nil
                 self.isConnected = false
-                self.terminalOutput += "\n已断开连接\n"
+                self.history.append(CommandHistoryItem(command: "system", output: "已断开连接"))
             }
         }
     }

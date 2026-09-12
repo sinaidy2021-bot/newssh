@@ -18,11 +18,9 @@ struct TerminalView: View {
     @FocusState private var isInputFocused: Bool
 
     let quickCommands: [QuickCmd] = [
+        QuickCmd(name: "输入 k 菜单", cmd: "k"),
         QuickCmd(name: "查看文件 (ls)", cmd: "ls -la"),
         QuickCmd(name: "磁盘空间 (df)", cmd: "df -h"),
-        QuickCmd(name: "资源占用 (top)", cmd: "top -bn1 | head -n 20"),
-        QuickCmd(name: "当前用户 (whoami)", cmd: "whoami"),
-        QuickCmd(name: "当前目录 (pwd)", cmd: "pwd"),
         QuickCmd(name: "系统信息 (uname)", cmd: "uname -a")
     ]
 
@@ -52,7 +50,6 @@ struct TerminalView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
-                        // 遍历每一条独立的命令记录块
                         ForEach(session.history) { item in
                             VStack(alignment: .leading, spacing: 4) {
                                 if item.command == "system" {
@@ -60,13 +57,13 @@ struct TerminalView: View {
                                         .font(.system(size: 13, design: .monospaced))
                                         .foregroundColor(.yellow)
                                 } else {
-                                    // 命令显示为青色
-                                    Text("$ \(item.command)")
+                                    // 经典的 root 提示符和命令样式
+                                    Text("root@\(serverName):~# \(item.command)")
                                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                                         .foregroundColor(.cyan)
                                     
-                                    // 结果显示为绿色，并且自带独立的文本选中/长按复制功能
-                                    Text(item.output)
+                                    // 结果支持独立复制
+                                    Text(item.output.isEmpty ? "..." : item.output)
                                         .font(.system(size: 13, design: .monospaced))
                                         .foregroundColor(.green)
                                         .textSelection(.enabled)
@@ -97,7 +94,7 @@ struct TerminalView: View {
             }
 
             HStack(spacing: 8) {
-                TextField("输入 Linux 命令...", text: $inputCommand)
+                TextField("输入命令 (如 k)...", text: $inputCommand)
                     .focused($isInputFocused)
                     .textFieldStyle(PlainTextFieldStyle())
                     .padding(.horizontal, 12)

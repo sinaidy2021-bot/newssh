@@ -21,7 +21,17 @@ jobs:
 
       - name: Build App
         run: |
+          set -o pipefail
           xcodebuild -project MySSH.xcodeproj \
+            -scheme MySSH \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build | xcpretty || xcodebuild -project MySSH.xcodeproj \
             -scheme MySSH \
             -configuration Release \
             -sdk iphoneos \

@@ -57,7 +57,6 @@ struct TerminalView: View {
                             .font(.system(size: 13, design: .monospaced))
                             .foregroundColor(.green)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
                         
                         // 底部锚点：强制滚到最下方
                         Color.clear
@@ -68,17 +67,18 @@ struct TerminalView: View {
                     .frame(maxWidth: .infinity, minHeight: 450, alignment: .topLeading)
                 }
                 .background(Color.black)
+                // 点击黑屏收起键盘 (最兼容写法)
                 .onTapGesture {
                     isInputFocused = false
                 }
-                .scrollDismissesKeyboard(.interactively)
-                .onChange(of: session.terminalOutput) { _, _ in
+                // 监听输出文字变化，并自动滚动到底部 (兼容所有 iOS 版本写法)
+                .onChange(of: session.terminalOutput, perform: { _ in
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                         withAnimation {
                             proxy.scrollTo("BOTTOM_ID", anchor: .bottom)
                         }
                     }
-                }
+                })
             }
 
             // 底部输入栏
@@ -90,8 +90,8 @@ struct TerminalView: View {
                     .padding(.vertical, 8)
                     .background(Color(.systemGray6))
                     .cornerRadius(8)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
+                    .disableAutocorrection(true)
+                    .autocapitalization(.none)
                     .onSubmit {
                         executeCurrentInput()
                     }
@@ -142,13 +142,13 @@ struct TerminalView: View {
     private func runCommand(_ cmd: String) {
         isInputFocused = false
         
-        // 1. 本地立即回显输入的命令
+        // 本地回显
         if !session.terminalOutput.hasSuffix("\n") && !session.terminalOutput.isEmpty {
             session.terminalOutput += "\n"
         }
         session.terminalOutput += "$ \(cmd)\n"
         
-        // 2. 补齐末尾回车换行符
+        // 补齐回车
         let finalCmd = cmd.hasSuffix("\n") ? cmd : "\(cmd)\n"
         session.sendCommand(finalCmd)
     }

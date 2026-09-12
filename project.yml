@@ -1,19 +1,16 @@
 name: MySSH
 options:
-  bundleIdPrefix: com.myssh
+  bundleIdPrefix: com.example
 targets:
   MySSH:
     type: application
     platform: iOS
-    deploymentTarget: "17.0"
-    sources: [.]
-    settings:
-      PRODUCT_BUNDLE_IDENTIFIER: com.myssh.app
-      INFOPLIST_FILE: Info.plist
-      SWIFT_VERSION: "5.0"
+    deploymentTarget: "16.0"
+    sources:
+      - path: newssh
     dependencies:
       - package: Citadel
 packages:
   Citadel:
     url: https://github.com/orlandos-nl/Citadel.git
-    from: 0.7.0
+    branch: main

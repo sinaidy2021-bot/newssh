@@ -21,7 +21,7 @@ jobs:
 
       - name: Build App with Detailed Logs
         run: |
-          set -pipefail
+          set -o pipefail
           xcodebuild -project MySSH.xcodeproj \
             -scheme MySSH \
             -configuration Release \
@@ -31,7 +31,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            build || (echo "=== BUILD FAILED, SHOWING LOGS ===" && find ~/Library/Developer/Xcode/DerivedData -name "*.log" -exec cat {} + && exit 1)
+            build || exit 1
 
       - name: Package IPA
         run: |

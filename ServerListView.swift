@@ -114,7 +114,6 @@ struct ServerListView: View {
            let decoded = try? JSONDecoder().decode([ServerItem].self, from: data) {
             self.servers = decoded
         } else {
-            // 清空默认测试机器，保持为空列表
             self.servers = []
         }
     }

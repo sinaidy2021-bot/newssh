@@ -14,14 +14,16 @@ jobs:
       - name: 调试-显示仓库目录结构
         shell: bash
         run: |
+          set +e
           {
             echo "=== pwd ==="
             pwd
             echo "=== GITHUB_WORKSPACE 根目录 (深度2) ==="
-            find "$GITHUB_WORKSPACE" -maxdepth 2 -print
+            find "$GITHUB_WORKSPACE" -maxdepth 2 2>&1
             echo "=== 是否存在 project.yml ==="
-            find "$GITHUB_WORKSPACE" -maxdepth 3 -name "project.yml" -print
+            find "$GITHUB_WORKSPACE" -maxdepth 3 -name "project.yml" 2>&1
           } | tee repo-structure.log
+          exit 0
 
       - name: Show Xcode version
         run: |

@@ -56,15 +56,11 @@ class SSHSession: ObservableObject {
                     reconnect: .never
                 )
                 
-                let bannerOutput = try await client.executeCommand("uname -a")
-                let bannerResult = String(buffer: bannerOutput)
-                let cleanedBanner = self.cleanANSI(bannerResult).trimmingCharacters(in: .whitespacesAndNewlines)
-                
                 await MainActor.run {
                     self.client = client
                     self.isConnected = true
                     if self.history.isEmpty {
-                        self.history.append(CommandHistoryItem(command: "system", output: cleanedBanner))
+                        self.history.append(CommandHistoryItem(command: "system", output: "已成功直连至 \(self.host):\(self.port)"))
                     }
                     self.startKeepAlive()
                 }

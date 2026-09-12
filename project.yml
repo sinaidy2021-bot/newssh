@@ -16,10 +16,10 @@ targets:
     platform: iOS
     sources:
       - path: .
-        includes:
-          - MySSHApp.swift
-          - ContentView.swift
-          - SSHSession.swift
+        excludes:
+          - "*.md"
+          - "*.yml"
+          - ".github/**"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.myssh.terminal

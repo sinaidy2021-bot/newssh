@@ -23,15 +23,7 @@ struct ServerListView: View {
     var body: some View {
         NavigationView {
             List {
-
-                if servers.isEmpty {
-                    EmptyServerView()
-                } else {
-                    ForEach(servers) { server in
-                        ServerRowView(server: server)
-                    }
-                    .onDelete(perform: deleteServer)
-                }
+                serverListContent
             }
             .navigationTitle("服务器列表")
             .toolbar {
@@ -44,10 +36,10 @@ struct ServerListView: View {
                 }
             }
             .sheet(isPresented: $showingAddSheet) {
-                AddServerView { server in
-                    servers.append(server)
-                    saveServers()
-                }
+                AddServerView(
+                    servers: $servers,
+                    storageKey: storageKey
+                )
             }
             .onAppear {
                 loadServers()
@@ -55,10 +47,24 @@ struct ServerListView: View {
         }
     }
 
+    @ViewBuilder
+    private var serverListContent: some View {
+        if servers.isEmpty {
+            EmptyServerView()
+        } else {
+            ForEach(servers) { server in
+                ServerRowView(server: server)
+            }
+            .onDelete(perform: deleteServer)
+        }
+    }
+
     // MARK: - Storage
 
     private func loadServers() {
-        guard let data = UserDefaults.standard.data(forKey: storageKey) else {
+        guard let data = UserDefaults.standard.data(
+            forKey: storageKey
+        ) else {
             servers = []
             return
         }
@@ -74,8 +80,15 @@ struct ServerListView: View {
         servers = decoded
     }
 
+    private func deleteServer(at offsets: IndexSet) {
+        servers.remove(atOffsets: offsets)
+        saveServers()
+    }
+
     private func saveServers() {
-        guard let encoded = try? JSONEncoder().encode(servers) else {
+        guard let encoded = try? JSONEncoder().encode(
+            servers
+        ) else {
             return
         }
 
@@ -83,11 +96,6 @@ struct ServerListView: View {
             encoded,
             forKey: storageKey
         )
-    }
-
-    private func deleteServer(at offsets: IndexSet) {
-        servers.remove(atOffsets: offsets)
-        saveServers()
     }
 }
 
@@ -125,7 +133,7 @@ private struct ServerRowView: View {
     }
 }
 
-// MARK: - Empty View
+// MARK: - Empty Server View
 
 private struct EmptyServerView: View {
 
@@ -162,7 +170,9 @@ private struct AddServerView: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    let onSave: (ServerItem) -> Void
+    @Binding var servers: [ServerItem]
+
+    let storageKey: String
 
     @State private var newName = ""
     @State private var newHost = ""
@@ -192,6 +202,7 @@ private struct AddServerView: View {
                         text: $newPort
                     )
                     .keyboardType(.numberPad)
+
                 } header: {
                     Text("基本信息")
                 }
@@ -208,6 +219,7 @@ private struct AddServerView: View {
                         "密码",
                         text: $newPassword
                     )
+
                 } header: {
                     Text("认证信息")
                 }
@@ -228,7 +240,7 @@ private struct AddServerView: View {
                     placement: .confirmationAction
                 ) {
                     Button("保存") {
-                        saveServer()
+                        addServer()
                     }
                     .disabled(
                         newName.trimmingCharacters(
@@ -244,7 +256,9 @@ private struct AddServerView: View {
         }
     }
 
-    private func saveServer() {
+    // MARK: - Add
+
+    private func addServer() {
 
         let name = newName.trimmingCharacters(
             in: .whitespacesAndNewlines
@@ -258,17 +272,36 @@ private struct AddServerView: View {
             in: .whitespacesAndNewlines
         )
 
-        let port = Int(newPort) ?? 22
+        let portValue = Int(newPort) ?? 22
 
         let server = ServerItem(
             name: name,
             host: host,
-            port: port,
+            port: portValue,
             username: username.isEmpty ? "root" : username,
             password: newPassword
         )
 
-        onSave(server)
+        servers.append(server)
+
+        saveServers()
+
         dismiss()
+    }
+
+    // MARK: - Storage
+
+    private func saveServers() {
+
+        guard let encoded = try? JSONEncoder().encode(
+            servers
+        ) else {
+            return
+        }
+
+        UserDefaults.standard.set(
+            encoded,
+            forKey: storageKey
+        )
     }
 }

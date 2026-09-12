@@ -1,6 +1,6 @@
 import SwiftUI
 
-// 中文快捷命令结构
+// 中文快捷命令模型
 struct QuickCmd: Identifiable {
     let id = UUID()
     let name: String
@@ -9,7 +9,7 @@ struct QuickCmd: Identifiable {
 
 struct TerminalView: View {
     let serverName: String
-    @ObservedObject var session: SSHSession
+    @StateObject private var session = SSHSession()
     @State private var inputCommand: String = ""
     @FocusState private var isInputFocused: Bool
 
@@ -59,7 +59,7 @@ struct TerminalView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
                         
-                        // 底部锚点：确保永远滚到最底下
+                        // 底部锚点：强制滚到最下方
                         Color.clear
                             .frame(height: 1)
                             .id("BOTTOM_ID")
@@ -72,8 +72,7 @@ struct TerminalView: View {
                     isInputFocused = false
                 }
                 .scrollDismissesKeyboard(.interactively)
-                // 收到新输出时立即强制滚到最底端
-                .onChange(of: session.terminalOutput) {
+                .onChange(of: session.terminalOutput) { _, _ in
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                         withAnimation {
                             proxy.scrollTo("BOTTOM_ID", anchor: .bottom)
@@ -125,6 +124,12 @@ struct TerminalView: View {
                 }
             }
         }
+        .onAppear {
+            session.connect()
+        }
+        .onDisappear {
+            session.disconnect()
+        }
     }
 
     private func executeCurrentInput() {
@@ -137,13 +142,13 @@ struct TerminalView: View {
     private func runCommand(_ cmd: String) {
         isInputFocused = false
         
-        // 1. 本地立即回显输入的命令提示符
+        // 1. 本地立即回显输入的命令
         if !session.terminalOutput.hasSuffix("\n") && !session.terminalOutput.isEmpty {
             session.terminalOutput += "\n"
         }
         session.terminalOutput += "$ \(cmd)\n"
         
-        // 2. 确保命令末尾带回车换行符，否则 Linux 不会执行
+        // 2. 补齐末尾回车换行符
         let finalCmd = cmd.hasSuffix("\n") ? cmd : "\(cmd)\n"
         session.sendCommand(finalCmd)
     }

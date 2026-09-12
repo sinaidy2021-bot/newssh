@@ -25,8 +25,6 @@ class SSHSession: ObservableObject {
 
     @Published var isConnected: Bool = false
     @Published var history: [CommandHistoryItem] = []
-
-    // 当前真实 Shell Prompt
     @Published var currentPrompt: String = ""
 
     private var client: SSHClient?
@@ -40,9 +38,16 @@ class SSHSession: ObservableObject {
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var keepAliveTimer: Timer?
 
-    // Shell 是串行执行的。
-    // 队列第一个命令收到 Prompt 后，就代表该命令结束。
+    // MARK: - 串行命令队列
+
+    // 已经建立历史块、等待执行/正在执行的命令 ID
     private var pendingCommandIDs: [UUID] = []
+
+    // 与 pendingCommandIDs 一一对应
+    private var pendingCommands: [String] = []
+
+    // 当前是否已经有一个命令正在等待 Prompt
+    private var commandIsRunning = false
 
     // MARK: - ANSI
 
@@ -189,6 +194,10 @@ class SSHSession: ObservableObject {
                     self.currentPrompt =
                         self.fallbackPrompt()
 
+                    self.pendingCommandIDs.removeAll()
+                    self.pendingCommands.removeAll()
+                    self.commandIsRunning = false
+
                     if self.history.isEmpty {
 
                         self.history.append(
@@ -222,7 +231,16 @@ class SSHSession: ObservableObject {
                 ) { [weak self] stream, writer in
 
                     await MainActor.run {
-                        self?.activeWriter = writer
+
+                        guard let self = self else {
+                            return
+                        }
+
+                        self.activeWriter = writer
+
+                        // 如果连接建立之前已经排队了命令，
+                        // Writer 出现后立即开始第一个。
+                        self.startNextQueuedCommand()
                     }
 
                     for try await event in stream {
@@ -255,6 +273,7 @@ class SSHSession: ObservableObject {
                             }
 
                             await MainActor.run {
+
                                 self.appendOutput(
                                     cleaned
                                 )
@@ -277,8 +296,13 @@ class SSHSession: ObservableObject {
 
                     self.isConnected = false
                     self.activeWriter = nil
+
                     self.stopKeepAlive()
+
                     self.pendingCommandIDs.removeAll()
+                    self.pendingCommands.removeAll()
+
+                    self.commandIsRunning = false
                 }
             }
         }
@@ -292,7 +316,13 @@ class SSHSession: ObservableObject {
 
         var incomingText = text
 
-        // 收到真实 Prompt
+        // ------------------------------------------------
+        // 先检查是不是 Shell Prompt。
+        //
+        // 收到 Prompt = 当前命令已经真正结束。
+        // 只有到了这里，才允许发送下一个命令。
+        // ------------------------------------------------
+
         if let promptResult =
             extractTrailingPrompt(
                 from: incomingText
@@ -304,11 +334,14 @@ class SSHSession: ObservableObject {
             incomingText =
                 promptResult.output
 
-            // 当前命令执行完成
             if !pendingCommandIDs.isEmpty {
 
                 let finishedID =
                     pendingCommandIDs.removeFirst()
+
+                if !pendingCommands.isEmpty {
+                    pendingCommands.removeFirst()
+                }
 
                 if let index =
                     history.firstIndex(
@@ -324,6 +357,12 @@ class SSHSession: ObservableObject {
                     }
                 }
 
+                // 当前命令彻底结束。
+                commandIsRunning = false
+
+                // 现在才开始下一个。
+                startNextQueuedCommand()
+
                 return
             }
         }
@@ -332,8 +371,11 @@ class SSHSession: ObservableObject {
             return
         }
 
-        // 有命令正在执行，
-        // 输出只归属于队列第一个命令。
+        // ------------------------------------------------
+        // 有命令正在执行：
+        // 所有输出只允许进入队列第一个命令。
+        // ------------------------------------------------
+
         if let firstPendingID =
             pendingCommandIDs.first,
            let index =
@@ -349,8 +391,11 @@ class SSHSession: ObservableObject {
             return
         }
 
-        // 没有等待命令：
-        // 欢迎信息 / 系统信息
+        // ------------------------------------------------
+        // 没有命令等待：
+        // 欢迎信息 / 系统信息。
+        // ------------------------------------------------
+
         if let lastIndex =
             history.indices.last,
            history[lastIndex].command == "system" {
@@ -419,40 +464,90 @@ class SSHSession: ObservableObject {
          uname -a; df -h; free -h
 
          注意：
-         这里只把真正的命令分隔符拆开。
+         ; 只在引号之外作为分隔符。
 
-         不会拆：
-         && 
-         ||
-         因为这两个属于 Shell 条件执行，
-         如果强行拆开会改变原来的执行逻辑。
+         && / || 不拆。
+         因为强行拆成多个独立 SSH 命令会改变 Shell
+         原本的条件执行逻辑。
         */
 
         var result: [String] = []
+        var current = ""
 
-        let newlineParts =
-            command.components(
-                separatedBy: .newlines
-            )
+        var singleQuote = false
+        var doubleQuote = false
+        var escaped = false
 
-        for line in newlineParts {
+        for character in command {
 
-            let parts =
-                line.components(
-                    separatedBy: ";"
-                )
+            if escaped {
 
-            for part in parts {
+                current.append(character)
+                escaped = false
+                continue
+            }
+
+            if character == "\\" && !singleQuote {
+
+                current.append(character)
+                escaped = true
+                continue
+            }
+
+            if character == "'" && !doubleQuote {
+
+                singleQuote.toggle()
+                current.append(character)
+                continue
+            }
+
+            if character == "\"" && !singleQuote {
+
+                doubleQuote.toggle()
+                current.append(character)
+                continue
+            }
+
+            if character == ";" && !singleQuote && !doubleQuote {
 
                 let value =
-                    part.trimmingCharacters(
+                    current.trimmingCharacters(
                         in: .whitespacesAndNewlines
                     )
 
                 if !value.isEmpty {
                     result.append(value)
                 }
+
+                current = ""
+                continue
             }
+
+            if character == "\n" && !singleQuote && !doubleQuote {
+
+                let value =
+                    current.trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    )
+
+                if !value.isEmpty {
+                    result.append(value)
+                }
+
+                current = ""
+                continue
+            }
+
+            current.append(character)
+        }
+
+        let finalValue =
+            current.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+
+        if !finalValue.isEmpty {
+            result.append(finalValue)
         }
 
         return result
@@ -475,18 +570,25 @@ class SSHSession: ObservableObject {
             return
         }
 
-        /*
-         先在主线程建立完整历史队列，
-         再开始发送。
+        // ------------------------------------------------
+        // 先建立所有历史块。
+        //
+        // 例如：
+        //
+        // uname -a; df -h; free -h
+        //
+        // 会立即建立：
+        //
+        // [uname -a]
+        // [df -h]
+        // [free -h]
+        //
+        // 但只发送第一个。
+        // ------------------------------------------------
 
-         这样不会出现：
-         “命令已经发出，但 pendingCommandIDs
-          还没加入”的竞态问题。
-        */
+        for cmd in commands {
 
-        let items =
-            commands.map { cmd in
-
+            let item =
                 CommandHistoryItem(
                     command: cmd,
                     output: "",
@@ -495,80 +597,101 @@ class SSHSession: ObservableObject {
                         ? fallbackPrompt()
                         : currentPrompt
                 )
-            }
-
-        for item in items {
 
             history.append(item)
 
             pendingCommandIDs.append(
                 item.id
             )
+
+            pendingCommands.append(
+                cmd
+            )
         }
+
+        // 只有这里启动。
+        // 后面的命令由收到 Prompt 后自动启动。
+        startNextQueuedCommand()
+    }
+
+    // MARK: - 开始队列中的下一个命令
+
+    private func startNextQueuedCommand() {
+
+        guard !commandIsRunning else {
+            return
+        }
+
+        guard !pendingCommandIDs.isEmpty,
+              !pendingCommands.isEmpty else {
+            return
+        }
+
+        guard isConnected else {
+            return
+        }
+
+        guard let writer = activeWriter else {
+            // Writer 还没准备好。
+            // 等 withPTY 设置 activeWriter 后再次调用。
+            return
+        }
+
+        let command =
+            pendingCommands[0]
+
+        commandIsRunning = true
 
         Task {
 
             do {
 
-                guard let writer =
-                    self.activeWriter else {
-                    return
-                }
+                var buffer =
+                    ByteBufferAllocator()
+                        .buffer(
+                            capacity:
+                                command.utf8.count + 1
+                        )
 
-                /*
-                 每个命令单独写入。
+                buffer.writeString(
+                    command + "\n"
+                )
 
-                 例如：
-
-                 uname -a; df -h; free -h
-
-                 实际发送：
-
-                 uname -a\n
-                 df -h\n
-                 free -h\n
-
-                 Shell 会分别返回 Prompt，
-                 因此每个输出可以准确归属到
-                 对应的历史块。
-                */
-
-                for cmd in commands {
-
-                    var buffer =
-                        ByteBufferAllocator()
-                            .buffer(
-                                capacity:
-                                    cmd.utf8.count + 1
-                            )
-
-                    buffer.writeString(
-                        cmd + "\n"
-                    )
-
-                    try await writer.write(
-                        buffer
-                    )
-                }
+                try await writer.write(
+                    buffer
+                )
 
             } catch {
 
                 await MainActor.run {
 
-                    if let firstPendingID =
-                        self.pendingCommandIDs.first,
-                       let index =
-                        self.history.firstIndex(
-                            where: {
-                                $0.id == firstPendingID
-                            }
-                        ) {
-
-                        self.history[index].output =
-                            "写入失败: \(error.localizedDescription)"
-
-                        self.pendingCommandIDs.removeFirst()
+                    guard
+                        let failedID =
+                            self.pendingCommandIDs.first,
+                        let index =
+                            self.history.firstIndex(
+                                where: {
+                                    $0.id == failedID
+                                }
+                            )
+                    else {
+                        self.commandIsRunning = false
+                        return
                     }
+
+                    self.history[index].output =
+                        "写入失败: \(error.localizedDescription)"
+
+                    self.pendingCommandIDs.removeFirst()
+
+                    if !self.pendingCommands.isEmpty {
+                        self.pendingCommands.removeFirst()
+                    }
+
+                    self.commandIsRunning = false
+
+                    // 当前失败后继续处理后面的队列。
+                    self.startNextQueuedCommand()
                 }
             }
         }
@@ -707,7 +830,11 @@ class SSHSession: ObservableObject {
                 self.client = nil
                 self.activeWriter = nil
                 self.isConnected = false
+
                 self.pendingCommandIDs.removeAll()
+                self.pendingCommands.removeAll()
+
+                self.commandIsRunning = false
 
                 self.history.append(
                     CommandHistoryItem(

@@ -1,17 +1,14 @@
 import Foundation
 import Citadel
-
-struct CommandHistoryItem: Identifiable {
-    let id = UUID()
-    let command: String
-    var output: String
-}
+import NIOCore
 
 class SSHSession: ObservableObject {
     @Published var isConnected: Bool = false
     @Published var history: [CommandHistoryItem] = []
     
     private var client: SSHClient?
+    private var shellStream: SSHChannel?
+    private var shellWriter: NIOAsyncChannelWriter<ByteBuffer>?
     
     var host: String = ""
     var port: Int = 22
@@ -47,14 +44,33 @@ class SSHSession: ObservableObject {
                     reconnect: .never
                 )
                 
+                // 开启交互式 Shell 终端通道
+                let shell = try await client.executeShell(term: "xterm-256color")
+                
                 await MainActor.run {
                     self.client = client
                     self.isConnected = true
-                    self.history.append(CommandHistoryItem(command: "system", output: "连接成功！"))
+                    self.history.append(CommandHistoryItem(command: "system", output: "连接成功！交互式终端已就绪。"))
                 }
+                
+                // 持续监听服务器返回的数据流
+                for try await var buffer in shell.inbound {
+                    if let string = buffer.readString(length: buffer.readableBytes) {
+                        let cleaned = self.cleanANSI(string)
+                        await MainActor.run {
+                            if !self.history.isEmpty {
+                                self.history[self.history.count - 1].output += cleaned
+                            } else {
+                                self.history.append(CommandHistoryItem(command: "output", output: cleaned))
+                            }
+                        }
+                    }
+                }
+                
             } catch {
                 await MainActor.run {
-                    self.history.append(CommandHistoryItem(command: "system", output: "连接失败: \(error.localizedDescription)"))
+                    self.history.append(CommandHistoryItem(command: "system", output: "连接或会话出错: \(error.localizedDescription)"))
+                    self.isConnected = false
                 }
             }
         }
@@ -69,28 +85,33 @@ class SSHSession: ObservableObject {
         let cmdToSend = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cmdToSend.isEmpty else { return }
 
-        // 先向列表添加一条“执行中”的占位记录
-        let index = history.count
+        // 在历史记录中新增一条命令卡片
         DispatchQueue.main.async {
-            self.history.append(CommandHistoryItem(command: cmdToSend, output: "执行中..."))
+            self.history.append(CommandHistoryItem(command: cmdToSend, output: ""))
         }
 
         Task {
             do {
-                let output = try await client.executeCommand(cmdToSend)
+                // 通过标准输入向远程 Shell 发送命令
+                // 注意：交互式脚本需要带上回车 \n
+                var buffer = client.allocator.buffer(capacity: cmdToSend.utf8.count + 1)
+                buffer.writeString(cmdToSend + "\n")
+                
+                // 这里利用 client 执行单次或通过 shell 写入
+                let output = try await client.executeCommand("export TERM=xterm-256color; " + cmdToSend)
                 let result = String(buffer: output)
                 let cleaned = cleanANSI(result)
                 let finalOutput = cleaned.isEmpty ? "(命令已执行，无输出)" : cleaned
                 
                 await MainActor.run {
-                    if self.history.indices.contains(index) {
-                        self.history[index].output = finalOutput
+                    if let lastIndex = self.history.indices.last {
+                        self.history[lastIndex].output = finalOutput
                     }
                 }
             } catch {
                 await MainActor.run {
-                    if self.history.indices.contains(index) {
-                        self.history[index].output = "执行出错: \(error.localizedDescription)"
+                    if let lastIndex = self.history.indices.last {
+                        self.history[lastIndex].output = "执行出错: \(error.localizedDescription)"
                     }
                 }
             }

@@ -168,7 +168,7 @@ struct TerminalView: View {
                     .disableAutocorrection(true)
                     .onSubmit { executeCurrentInput() }
 
-                // 纯黑不透明微型键盘
+                // 纯黑不透明微型键盘（集成一键粘贴功能）
                 VStack(spacing: 6) {
                     HStack(spacing: 8) {
                         Button(action: {
@@ -199,6 +199,24 @@ struct TerminalView: View {
                                 Image(systemName: "xmark.circle.fill")
                                     .foregroundColor(.gray)
                             }
+                        }
+
+                        // 新增：快捷粘贴小按钮
+                        Button(action: {
+                            if let pasteString = UIPasteboard.general.string {
+                                inputCommand.append(pasteString)
+                                showToast("已从剪贴板粘贴")
+                            } else {
+                                showToast("剪贴板为空")
+                            }
+                        }) {
+                            Text("粘贴")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(.cyan)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(Color(white: 0.2))
+                                .cornerRadius(5)
                         }
 
                         Button(action: { executeCurrentInput() }) {
@@ -247,8 +265,13 @@ struct TerminalView: View {
                                 miniKey("退格", icon: "delete.left") {
                                     if !inputCommand.isEmpty { inputCommand.removeLast() }
                                 }
-                                miniKey("Aa 全键盘", icon: "textformat") {
-                                    isSystemKeyboardFocused = true
+                                miniKey("📋 粘贴", color: Color.blue.opacity(0.4)) {
+                                    if let pasteString = UIPasteboard.general.string {
+                                        inputCommand.append(pasteString)
+                                        showToast("已粘贴剪贴板内容")
+                                    } else {
+                                        showToast("剪贴板为空")
+                                    }
                                 }
                             }
                         }
@@ -333,24 +356,28 @@ struct TerminalView: View {
         showToast(tip)
     }
 
-    // 智能识别：无论是网址、密码、账号、端口还是带有冒号配置的行，均自动配备专属复制按钮
     @ViewBuilder
     private func renderOutputLines(_ fullText: String, defaultColor: Color) -> some View {
         let lines = fullText.components(separatedBy: "\n")
         VStack(alignment: .leading, spacing: 2) {
             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
-                let shouldShowCopyButton = trimmed.contains("http://") || 
-                                           trimmed.contains("https://") || 
-                                           trimmed.contains("port:") || 
-                                           trimmed.contains("username") || 
-                                           trimmed.contains("password") || 
-                                           trimmed.contains("path:") || 
-                                           trimmed.contains("URL:") || 
-                                           trimmed.contains("IP:") || 
-                                           (trimmed.contains(":") && !trimmed.hasSuffix(":") && trimmed.count < 60)
+                let isPromptLine = trimmed.hasPrefix("root@") || trimmed.hasPrefix("user@") || trimmed.contains("~#")
+                
+                let isConfigLine = !isPromptLine && !trimmed.isEmpty && (
+                    trimmed.contains("http://") || 
+                    trimmed.contains("https://") || 
+                    trimmed.lowercased().contains("port:") || 
+                    trimmed.lowercased().contains("username") || 
+                    trimmed.lowercased().contains("password") || 
+                    trimmed.lowercased().contains("path:") || 
+                    trimmed.lowercased().contains("url:") || 
+                    trimmed.lowercased().contains("ip:") ||
+                    trimmed.lowercased().contains("username:") ||
+                    trimmed.lowercased().contains("password:")
+                )
 
-                if shouldShowCopyButton {
+                if isConfigLine {
                     HStack(alignment: .center, spacing: 6) {
                         Text(line)
                             .font(.system(size: 13, design: .monospaced))
@@ -358,7 +385,6 @@ struct TerminalView: View {
                             .textSelection(.enabled)
                         
                         Button(action: {
-                            // 如果行内包含 URL，优先截取复制 URL；否则复制整行核心内容
                             if let url = extractURL(from: line) {
                                 UIPasteboard.general.string = url
                                 showToast("已复制地址: \(url)")

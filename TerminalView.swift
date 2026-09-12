@@ -53,7 +53,7 @@ struct TerminalView: View {
                             .font(.system(size: 13, design: .monospaced))
                             .foregroundColor(.green)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled) // 支持长按复制选择
+                            .textSelection(.enabled)
                         
                         Color.clear
                             .frame(height: 1)
@@ -66,14 +66,13 @@ struct TerminalView: View {
                 .onTapGesture {
                     isInputFocused = false
                 }
-                // 使用标准单参数闭包解决 onChange 报错问题
-                .onChange(of: session.terminalOutput) { _ in
+                .onChange(of: session.terminalOutput, perform: { _ in
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                         withAnimation {
                             proxy.scrollTo("BOTTOM_ID", anchor: .bottom)
                         }
                     }
-                }
+                })
             }
 
             HStack(spacing: 8) {
@@ -84,9 +83,8 @@ struct TerminalView: View {
                     .padding(.vertical, 8)
                     .background(Color(.systemGray6))
                     .cornerRadius(8)
-                    // 使用最新的规范替代旧版 disableAutocorrection
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
+                    .disableAutocorrection(true)
+                    .autocapitalization(.none)
                     .onSubmit {
                         executeCurrentInput()
                     }
@@ -120,6 +118,7 @@ struct TerminalView: View {
             }
         }
         .onAppear {
+            // 如果外部 ServerListView 传入了 host 密码等，可以在这里绑定，如果没有则用默认空
             session.connect()
         }
         .onDisappear {
@@ -136,7 +135,11 @@ struct TerminalView: View {
 
     private func runCommand(_ cmd: String) {
         isInputFocused = false
-        // 交互式 PTY 模式下服务器自带回显，直接发生即可
+        if !session.terminalOutput.hasSuffix("\n") && !session.terminalOutput.isEmpty {
+            session.terminalOutput += "\n"
+        }
+        session.terminalOutput += "$ \(cmd)\n"
+        
         let finalCmd = cmd.hasSuffix("\n") ? cmd : "\(cmd)\n"
         session.sendCommand(finalCmd)
     }

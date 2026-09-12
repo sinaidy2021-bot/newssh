@@ -31,7 +31,7 @@ class SSHSession: ObservableObject {
 
     func connect() {
         guard !isConnected else { return }
-        self.terminalOutput += "正在连接到服务器...\n"
+        self.terminalOutput = "正在连接到服务器...\n"
         
         Task {
             do {
@@ -65,7 +65,6 @@ class SSHSession: ObservableObject {
 
         Task {
             do {
-                // 使用标准命令执行通道，确保 100% 编译通过
                 let stream = try await client.executeCommand("export TERM=xterm-256color; " + cmdToSend)
                 var result = ""
                 for try await chunk in stream {

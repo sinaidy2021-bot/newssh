@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import Citadel
 import NIOCore
 import NIOSSH
@@ -25,6 +26,10 @@ class SSHSession: ObservableObject {
     var port: Int = 22
     var username: String = "root"
     var password: String = ""
+
+    // 后台保活任务
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    private var keepAliveTimer: Timer?
 
     private func cleanANSI(_ raw: String) -> String {
         var text = raw
@@ -59,7 +64,10 @@ class SSHSession: ObservableObject {
                 await MainActor.run {
                     self.client = client
                     self.isConnected = true
-                    self.history.append(CommandHistoryItem(command: "system", output: cleanedBanner))
+                    if self.history.isEmpty {
+                        self.history.append(CommandHistoryItem(command: "system", output: cleanedBanner))
+                    }
+                    self.startKeepAlive()
                 }
                 
                 let ptyReq = SSHChannelRequestEvent.PseudoTerminalRequest(
@@ -85,9 +93,7 @@ class SSHSession: ObservableObject {
                         }
                         
                         if let text = buffer.getString(at: buffer.readerIndex, length: buffer.readableBytes) {
-                            // 【修复点】：在这里安全解包 self
                             guard let self = self else { return }
-                            
                             let cleaned = self.cleanANSI(text)
                             guard !cleaned.isEmpty else { continue }
                             
@@ -99,9 +105,10 @@ class SSHSession: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
-                    self.history.append(CommandHistoryItem(command: "system", output: "连接断开: \(error.localizedDescription)"))
+                    self.history.append(CommandHistoryItem(command: "system", output: "连接异常或断开: \(error.localizedDescription)"))
                     self.isConnected = false
                     self.activeWriter = nil
+                    self.stopKeepAlive()
                 }
             }
         }
@@ -157,14 +164,55 @@ class SSHSession: ObservableObject {
         }
     }
 
+    // 保活机制：每 25 秒发送静默探测，并保持后台任务
+    private func startKeepAlive() {
+        stopKeepAlive()
+        DispatchQueue.main.async {
+            self.keepAliveTimer = Timer.scheduledTimer(withTimeInterval: 25.0, repeats: true) { [weak self] _ in
+                guard let self = self, self.isConnected, let writer = self.activeWriter else { return }
+                Task {
+                    // 发送 0 字节空写入或空字符，激活 TCP 链路
+                    var buffer = ByteBufferAllocator().buffer(capacity: 1)
+                    buffer.writeString("")
+                    try? await writer.write(buffer)
+                }
+            }
+        }
+    }
+
+    private func stopKeepAlive() {
+        keepAliveTimer?.invalidate()
+        keepAliveTimer = nil
+    }
+
+    func appDidEnterBackground() {
+        guard isConnected else { return }
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "SSHKeepAlive") { [weak self] in
+            self?.endBackgroundTask()
+        }
+    }
+
+    func appWillEnterForeground() {
+        endBackgroundTask()
+    }
+
+    private func endBackgroundTask() {
+        if backgroundTask != .invalid {
+            UIApplication.shared.endBackgroundTask(backgroundTask)
+            backgroundTask = .invalid
+        }
+    }
+
     func disconnect() {
+        stopKeepAlive()
+        endBackgroundTask()
         Task {
             try? await self.client?.close()
             await MainActor.run {
                 self.client = nil
                 self.activeWriter = nil
                 self.isConnected = false
-                self.history.append(CommandHistoryItem(command: "system", output: "已断开连接"))
+                self.history.append(CommandHistoryItem(command: "system", output: "已主动断开连接"))
             }
         }
     }

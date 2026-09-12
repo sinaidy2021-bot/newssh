@@ -1,97 +1,135 @@
 import SwiftUI
 
-struct ServerItem: Identifiable {
-    let id = UUID()
-    let name: String
-    let host: String
-    let port: Int
-    let username: String
-    let password: String
+struct ServerItem: Identifiable, Codable, Equatable {
+    var id = UUID()
+    var name: String
+    var host: String
+    var port: Int
+    var username: String
+    var password: String
 }
 
 struct ServerListView: View {
-    @State private var servers: [ServerItem] = [
-        ServerItem(name: "默认测试服务器", host: "127.0.0.1", port: 22, username: "root", password: "")
-    ]
+    @State private var servers: [ServerItem] = []
+    @State private var showingAddSheet = false
     
-    @State private var showingAddScreen = false
     @State private var newName = ""
     @State private var newHost = ""
     @State private var newPort = "22"
     @State private var newUsername = "root"
     @State private var newPassword = ""
 
+    private let storageKey = "SavedSSHServers"
+
     var body: some View {
         NavigationView {
             List {
-                ForEach(servers) { server in
-                    NavigationLink(destination: TerminalView(
-                        serverName: server.name,
-                        host: server.host,
-                        port: server.port,
-                        username: server.username,
-                        password: server.password
-                    )) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(server.name)
-                                .font(.headline)
-                            Text("\(server.username)@\(server.host):\(server.port)")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                        }
-                        .padding(.vertical, 4)
+                if servers.isEmpty {
+                    VStack(alignment: .center, spacing: 12) {
+                        Image(systemName: "server.rack")
+                            .font(.system(size: 44))
+                            .foregroundColor(.gray)
+                        Text("暂无服务器")
+                            .font(.headline)
+                            .foregroundColor(.secondary)
+                        Text("点击右上角「+」添加你的 VPS 服务器")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 40)
+                    .listRowBackground(Color.clear)
+                } else {
+                    ForEach(servers) { server in
+                        NavigationLink(destination: TerminalView(
+                            serverName: server.name,
+                            host: server.host,
+                            port: server.port,
+                            username: server.username,
+                            password: server.password
+                        )) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(server.name)
+                                    .font(.headline)
+                                Text("\(server.username)@\(server.host):\(server.port)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                    .onDelete(perform: deleteServer)
                 }
-                .onDelete(perform: deleteServer)
             }
             .navigationTitle("服务器列表")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { showingAddScreen = true }) {
+                    Button(action: { showingAddSheet = true }) {
                         Image(systemName: "plus")
                     }
                 }
             }
-            .sheet(isPresented: $showingAddScreen) {
+            .sheet(isPresented: $showingAddSheet) {
                 NavigationView {
                     Form {
-                        TextField("服务器备注名称", text: $newName)
-                        TextField("IP 地址 (Host)", text: $newHost)
-                            .keyboardType(.decimalPad)
-                            .autocapitalization(.none)
-                        TextField("端口 (Port)", text: $newPort)
-                            .keyboardType(.numberPad)
-                        TextField("用户名 (Username)", text: $newUsername)
-                            .autocapitalization(.none)
-                        SecureField("密码 (Password)", text: $newPassword)
+                        Section(header: Text("基本信息")) {
+                            TextField("名称 (如: 香港VPS)", text: $newName)
+                            TextField("主机 IP / 域名", text: $newHost)
+                                .autocapitalization(.none)
+                                .disableAutocorrection(true)
+                            TextField("端口", text: $newPort)
+                                .keyboardType(.numberPad)
+                        }
+                        Section(header: Text("认证信息")) {
+                            TextField("用户名", text: $newUsername)
+                                .autocapitalization(.none)
+                                .disableAutocorrection(true)
+                            SecureField("密码", text: $newPassword)
+                        }
                     }
                     .navigationTitle("添加服务器")
+                    .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
-                            Button("取消") { showingAddScreen = false }
+                            Button("取消") { showingAddSheet = false }
                         }
                         ToolbarItem(placement: .confirmationAction) {
                             Button("保存") {
                                 addServer()
+                                showingAddSheet = false
                             }
+                            .disabled(newName.isEmpty || newHost.isEmpty)
                         }
                     }
                 }
             }
+            .onAppear {
+                loadServers()
+            }
+        }
+    }
+
+    private func loadServers() {
+        if let data = UserDefaults.standard.data(forKey: storageKey),
+           let decoded = try? JSONDecoder().decode([ServerItem].self, from: data) {
+            self.servers = decoded
+        } else {
+            // 清空默认测试机器，保持为空列表
+            self.servers = []
         }
     }
 
     private func addServer() {
-        let portInt = Int(newPort) ?? 22
-        let server = ServerItem(
-            name: newName.isEmpty ? newHost : newName,
-            host: newHost,
-            port: portInt,
-            username: newUsername.isEmpty ? "root" : newUsername,
+        let p = Int(newPort) ?? 22
+        let item = ServerItem(
+            name: newName.trimmingCharacters(in: .whitespaces),
+            host: newHost.trimmingCharacters(in: .whitespaces),
+            port: p,
+            username: newUsername.trimmingCharacters(in: .whitespaces),
             password: newPassword
         )
-        servers.append(server)
-        showingAddScreen = false
+        servers.append(item)
+        saveServers()
         
         newName = ""
         newHost = ""
@@ -102,5 +140,12 @@ struct ServerListView: View {
 
     private func deleteServer(at offsets: IndexSet) {
         servers.remove(atOffsets: offsets)
+        saveServers()
+    }
+
+    private func saveServers() {
+        if let encoded = try? JSONEncoder().encode(servers) {
+            UserDefaults.standard.set(encoded, forKey: storageKey)
+        }
     }
 }

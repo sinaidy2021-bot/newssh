@@ -10,19 +10,7 @@ targets:
       - path: .
     dependencies:
       - package: Citadel
-      - package: swift-nio
-        product: NIOCore
-      - package: swift-nio
-        product: NIOPosix
-      - package: swift-nio-ssh
-        product: NIOSSH
 packages:
   Citadel:
     url: https://github.com/orlandos-nl/Citadel.git
     branch: main
-  swift-nio:
-    url: https://github.com/apple/swift-nio.git
-    from: "2.65.0"
-  swift-nio-ssh:
-    url: https://github.com/apple/swift-nio-ssh.git
-    from: "0.9.0"

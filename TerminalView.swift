@@ -56,12 +56,12 @@ struct TerminalView: View {
                                         .foregroundColor(.yellow)
                                         .textSelection(.enabled)
                                 } else {
-                                    // 完美的专属提示符格式
+                                    // 完美的 root 提示符
                                     Text("root@\(serverName)~# \(item.command)")
                                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                                         .foregroundColor(.cyan)
                                     
-                                    // 支持独立长按选择复制
+                                    // 绿色输出区，自带长按分段复制
                                     Text(item.output)
                                         .font(.system(size: 13, design: .monospaced))
                                         .foregroundColor(.green)
@@ -86,7 +86,7 @@ struct TerminalView: View {
             }
 
             HStack(spacing: 8) {
-                TextField("输入命令 (如 k)...", text: $inputCommand)
+                TextField("输入交互回复或命令...", text: $inputCommand)
                     .focused($isInputFocused)
                     .textFieldStyle(PlainTextFieldStyle())
                     .padding(8)

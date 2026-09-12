@@ -27,7 +27,6 @@ class SSHSession: ObservableObject {
     var username: String = "root"
     var password: String = ""
 
-    // 后台保活任务
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var keepAliveTimer: Timer?
 
@@ -105,7 +104,7 @@ class SSHSession: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
-                    self.history.append(CommandHistoryItem(command: "system", output: "连接异常或断开: \(error.localizedDescription)"))
+                    self.history.append(CommandHistoryItem(command: "system", output: "连接断开或异常: \(error.localizedDescription)"))
                     self.isConnected = false
                     self.activeWriter = nil
                     self.stopKeepAlive()
@@ -164,14 +163,12 @@ class SSHSession: ObservableObject {
         }
     }
 
-    // 保活机制：每 25 秒发送静默探测，并保持后台任务
     private func startKeepAlive() {
         stopKeepAlive()
         DispatchQueue.main.async {
             self.keepAliveTimer = Timer.scheduledTimer(withTimeInterval: 25.0, repeats: true) { [weak self] _ in
                 guard let self = self, self.isConnected, let writer = self.activeWriter else { return }
                 Task {
-                    // 发送 0 字节空写入或空字符，激活 TCP 链路
                     var buffer = ByteBufferAllocator().buffer(capacity: 1)
                     buffer.writeString("")
                     try? await writer.write(buffer)

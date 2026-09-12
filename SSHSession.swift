@@ -9,6 +9,11 @@ public struct CommandHistoryItem: Identifiable {
     public let command: String
     public var output: String
     
+    public init(command: usernameOrPass, output: String) {
+        self.command = command
+        self.output = output
+    }
+    
     public init(command: String, output: String) {
         self.command = command
         self.output = output
@@ -60,7 +65,8 @@ class SSHSession: ObservableObject {
                     self.client = client
                     self.isConnected = true
                     if self.history.isEmpty {
-                        self.history.append(CommandHistoryItem(command: "system", output: "已成功直连至 \(self.host):\(self.port)"))
+                        // 初始只留简洁提示，过滤掉庞大的系统欢迎 MOTD 冗余信息
+                        self.history.append(CommandHistoryItem(command: "system", output: "连接成功：\(self.host)"))
                     }
                     self.startKeepAlive()
                 }
@@ -112,7 +118,16 @@ class SSHSession: ObservableObject {
     private func appendOutput(_ text: String) {
         if let lastIndex = self.history.indices.last {
             if self.history[lastIndex].command == "system" {
-                self.history.append(CommandHistoryItem(command: "output", output: text))
+                // 如果是刚连上时的输出，自动过滤掉长篇大论的登录 MOTD，只保留最后类似 Last login 或提示符附近的干净内容
+                var cleanedText = text
+                if cleanedText.contains("System information as of") {
+                    if let range = cleanedText.range(of: "root@") {
+                        cleanedText = String(cleanedText[range.lowerBound...])
+                    } else if let range2 = cleanedText.range(of: "Last login:") {
+                        cleanedText = String(cleanedText[range2.lowerBound...])
+                    }
+                }
+                self.history.append(CommandHistoryItem(command: "output", output: cleanedText))
             } else {
                 var currentOutput = self.history[lastIndex].output + text
                 let lastCmd = self.history[lastIndex].command

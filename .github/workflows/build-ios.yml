@@ -1,0 +1,61 @@
+name: Build iOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project MySSH.xcodeproj \
+            -scheme MySSH
+
+      - name: Build unsigned iOS app
+        run: |
+          rm -rf build
+
+          xcodebuild \
+            -project MySSH.xcodeproj \
+            -scheme MySSH \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Create IPA
+        run: |
+          rm -rf Payload
+          rm -f MySSH-unsigned.ipa
+
+          mkdir -p Payload
+
+          cp -R \
+            build/Build/Products/Release-iphoneos/MySSH.app \
+            Payload/MySSH.app
+
+          zip -r MySSH-unsigned.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: MySSH-unsigned-ipa
+          path: MySSH-unsigned.ipa

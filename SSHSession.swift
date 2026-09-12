@@ -65,17 +65,18 @@ class SSHSession: ObservableObject {
                     self.history.append(CommandHistoryItem(command: "system", output: cleanedBanner))
                 }
                 
-                let pty = SSHChannelRequestEvent.PseudoTerminalRequest(
+                // Citadel 官方标准的 PTY 请求构造
+                let ptyReq = SSHChannelRequestEvent.PseudoTerminalRequest(
                     wantReply: true,
                     term: "xterm-256color",
                     terminalCharacterWidth: 80,
                     terminalRowHeight: 24,
                     terminalPixelWidth: 0,
                     terminalPixelHeight: 0,
-                    terminalModes: .init()
+                    terminalModes: .init([.ECHO: 1])
                 )
                 
-                try await client.withPTY(pty) { [weak self] stream, writer in
+                try await client.withPTY(ptyReq) { [weak self] stream, writer in
                     await MainActor.run {
                         self?.activeWriter = writer
                     }

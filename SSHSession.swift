@@ -18,8 +18,7 @@ class SSHSession: ObservableObject {
     @Published var history: [CommandHistoryItem] = []
     
     private var client: SSHClient?
-    // 使用 Citadel 官方标准的交互式写入器
-    private var shellWriter: TTYStdinWriter?
+    private var ttyWriter: TTYStdinWriter?
     
     var host: String = ""
     var port: Int = 22
@@ -55,51 +54,38 @@ class SSHSession: ObservableObject {
                     reconnect: .never
                 )
                 
+                // 1. 抓取内核欢迎信息
+                let bannerOutput = try await client.executeCommand("uname -a")
+                let bannerResult = String(buffer: bannerOutput)
+                let cleanedBanner = self.cleanANSI(bannerResult).trimmingCharacters(in: .whitespacesAndNewlines)
+                
                 await MainActor.run {
                     self.client = client
                     self.isConnected = true
-                    self.history.append(CommandHistoryItem(command: "system", output: "连接成功，正在启动 PTY 交互终端..."))
+                    self.history.append(CommandHistoryItem(command: "system", output: cleanedBanner))
                 }
                 
-                // 配置交互式伪终端请求参数
-                let ptyReq = SSHChannelRequestEvent.PseudoTerminalRequest(
-                    wantReply: true,
-                    term: "xterm-256color",
-                    terminalCharacterWidth: 80,
-                    terminalRowHeight: 24,
-                    terminalPixelWidth: 0,
-                    terminalPixelHeight: 0,
-                    terminalModes: .init()
-                )
-                
-                // 开启 Citadel 官方支持的双向 PTY 会话管道
-                try await client.withPTY(ptyReq) { ttyOutput, writer in
+                // 2. 开启 PTY 交互会话
+                try await client.withPTY { [weak self] events, writer in
                     await MainActor.run {
-                        self.shellWriter = writer
-                        self.history.append(CommandHistoryItem(command: "system", output: "交互终端已完美就绪！(现在已支持 k 菜单等交互功能)"))
+                        self?.ttyWriter = writer
                     }
                     
-                    // 持续监听服务器实时返回的数据流，逐字追加到 UI
-                    for try await event in ttyOutput {
+                    for try await event in events {
                         let buffer: ByteBuffer
                         switch event {
                         case .stdout(let b): buffer = b
                         case .stderr(let b): buffer = b
                         }
                         
-                        if let string = buffer.getString(at: buffer.readerIndex, length: buffer.readableBytes) {
-                            let cleaned = self.cleanANSI(string)
+                        if let str = buffer.getString(at: buffer.readerIndex, length: buffer.readableBytes) {
+                            guard let self = self else { return }
+                            let cleaned = self.cleanANSI(str)
                             guard !cleaned.isEmpty else { continue }
                             
                             await MainActor.run {
-                                if let lastIndex = self.history.indices.last {
-                                    if self.history[lastIndex].command == "system" {
-                                        // 过滤掉系统状态卡片，新建一条输出
-                                        self.history.append(CommandHistoryItem(command: "output", output: cleaned))
-                                    } else {
-                                        // 追加入当前的命令块中
-                                        self.history[lastIndex].output += cleaned
-                                    }
+                                if let lastIndex = self.history.indices.last, self.history[lastIndex].command != "system" {
+                                    self.history[lastIndex].output += cleaned
                                 } else {
                                     self.history.append(CommandHistoryItem(command: "output", output: cleaned))
                                 }
@@ -110,40 +96,43 @@ class SSHSession: ObservableObject {
                 
             } catch {
                 await MainActor.run {
-                    self.history.append(CommandHistoryItem(command: "system", output: "连接/会话异常: \(error.localizedDescription)"))
+                    self.history.append(CommandHistoryItem(command: "system", output: "连接或通道关闭: \(error.localizedDescription)"))
                     self.isConnected = false
+                    self.ttyWriter = nil
                 }
             }
         }
     }
 
     func sendCommand(_ command: String) {
-        guard isConnected else { return }
-        
+        guard isConnected else {
+            self.history.append(CommandHistoryItem(command: command, output: "错误: 未连接到服务器"))
+            return
+        }
+
         let cmdToSend = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cmdToSend.isEmpty else { return }
 
-        // 推入一条新命令块（带 root@ 前缀的 UI 卡片）
+        // 追加一条新的命令展示卡片
         DispatchQueue.main.async {
             self.history.append(CommandHistoryItem(command: cmdToSend, output: ""))
         }
 
         Task {
             do {
-                if let writer = self.shellWriter {
-                    // 【关键修复点】：完美写入交互命令，模拟真实键盘敲击并按下回车
+                if let writer = self.ttyWriter {
+                    // 通过交互通道把命令发给远端（带换行符模拟回车）
                     var buffer = ByteBufferAllocator().buffer(capacity: cmdToSend.utf8.count + 1)
                     buffer.writeString(cmdToSend + "\n")
                     try await writer.write(buffer)
                 } else if let client = self.client {
-                    // 防御性降级：万一 PTY 通道没建起来，仍能单次执行
+                    // 后备单次执行
                     let output = try await client.executeCommand("export TERM=xterm-256color; " + cmdToSend)
                     let result = String(buffer: output)
                     let cleaned = self.cleanANSI(result)
-                    
                     await MainActor.run {
                         if let lastIndex = self.history.indices.last {
-                            self.history[lastIndex].output = cleaned.isEmpty ? "(已执行，无回显)" : cleaned
+                            self.history[lastIndex].output = cleaned.isEmpty ? "(已执行，无输出)" : cleaned
                         }
                     }
                 }
@@ -162,7 +151,7 @@ class SSHSession: ObservableObject {
             try? await self.client?.close()
             await MainActor.run {
                 self.client = nil
-                self.shellWriter = nil
+                self.ttyWriter = nil
                 self.isConnected = false
                 self.history.append(CommandHistoryItem(command: "system", output: "已断开连接"))
             }

@@ -34,7 +34,6 @@ class SSHSession: ObservableObject {
         
         Task {
             do {
-                // 使用 Citadel 标准签名，reconnect 传 .never
                 let client = try await SSHClient.connect(
                     host: self.host,
                     port: .init(integerLiteral: self.port),
@@ -67,20 +66,25 @@ class SSHSession: ObservableObject {
 
         Task {
             do {
-                let output = try await client.executeCommand("export TERM=xterm-256color; " + cmdToSend)
+                // 执行命令并转为字符串
+                let output = try await client.executeCommand(cmdToSend)
                 let result = String(buffer: output)
                 
                 let cleaned = cleanANSI(result)
                 await MainActor.run {
-                    self.terminalOutput += cleaned
-                    if !cleaned.hasSuffix("\n") {
+                    if !cleaned.isEmpty {
+                        self.terminalOutput += cleaned
+                    } else {
+                        self.terminalOutput += "(命令已执行，无输出)\n"
+                    }
+                    if !self.terminalOutput.hasSuffix("\n") {
                         self.terminalOutput += "\n"
                     }
                     self.terminalOutput += "$ "
                 }
             } catch {
                 await MainActor.run {
-                    self.terminalOutput += "执行失败: \(error.localizedDescription)\n$ "
+                    self.terminalOutput += "执行出错: \(error.localizedDescription)\n$ "
                 }
             }
         }

@@ -26,37 +26,14 @@ class SSHSession: ObservableObject {
     var username: String = "root"
     var password: String = ""
 
-    // 缓冲区及性能节流队列
-    private var pendingBuffer: String = ""
-    private var updateWorkItem: DispatchWorkItem?
-    private let updateQueue = DispatchQueue(label: "com.ssh.terminal.parser", qos: .userInteractive)
-
     private func cleanANSI(_ raw: String) -> String {
         var text = raw
-        // 1. 彻底清除 OSC 终端控制码（包括 ]0;root@... 等窗口标题设置）
-        text = text.replacingOccurrences(
-            of: #"\x1B\][^\x07\x1B]*(\x07|\x1B\\)?"#,
-            with: "",
-            options: .regularExpression
-        )
-        // 2. 清除标准 ANSI/CSI 颜色与控制序列
-        text = text.replacingOccurrences(
-            of: #"(\x1B\[|\x9B|\u{001B}\[[0-?]*[ -/]*[@-~])"#,
-            with: "",
-            options: .regularExpression
-        )
-        // 3. 清除光标与模式切换符号
-        text = text.replacingOccurrences(
-            of: #"\x1B[=@>]"#,
-            with: "",
-            options: .regularExpression
-        )
-        text = text.replacingOccurrences(
-            of: #"\[[0-9;]*[a-zA-Z]"#,
-            with: "",
-            options: .regularExpression
-        )
-        // 4. 标准化换行符
+        text = text.replacingOccurrences(of: #"\x1B\[\?[0-9]+[hl]"#, with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"\x1B\][^\x07\x1B]*(\x07|\x1B\\)?"#, with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"\x1B\[[0-9;]*[mKHz]"#, with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"\x1B[@-Z\\-_]|[\u001B\u009B][#()#?]*([\x20-\x7E]*)([@-~])"#, with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: "\u{001B}", with: "")
+        text = text.replacingOccurrences(of: "\u{009B}", with: "")
         text = text.replacingOccurrences(of: "\r\n", with: "\n")
         text = text.replacingOccurrences(of: "\r", with: "")
         return text
@@ -75,7 +52,6 @@ class SSHSession: ObservableObject {
                     reconnect: .never
                 )
                 
-                // 自动拉取系统内核信息
                 let bannerOutput = try await client.executeCommand("uname -a")
                 let bannerResult = String(buffer: bannerOutput)
                 let cleanedBanner = self.cleanANSI(bannerResult).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -86,7 +62,6 @@ class SSHSession: ObservableObject {
                     self.history.append(CommandHistoryItem(command: "system", output: cleanedBanner))
                 }
                 
-                // 开启标准的交互式 PTY 管道
                 let ptyReq = SSHChannelRequestEvent.PseudoTerminalRequest(
                     wantReply: true,
                     term: "xterm-256color",
@@ -110,7 +85,13 @@ class SSHSession: ObservableObject {
                         }
                         
                         if let text = buffer.getString(at: buffer.readerIndex, length: buffer.readableBytes) {
-                            self?.enqueueOutput(text)
+                            let cleaned = self.cleanANSI(text)
+                            guard !cleaned.isEmpty else { continue }
+                            
+                            // 实时同步到 UI，彻底摒弃慢速串行队列
+                            await MainActor.run {
+                                self?.appendOutput(cleaned)
+                            }
                         }
                     }
                 }
@@ -124,47 +105,27 @@ class SSHSession: ObservableObject {
         }
     }
 
-    // 后台节流聚合：消除卡顿与命令回显重复
-    private func enqueueOutput(_ text: String) {
-        updateQueue.async { [weak self] in
-            guard let self = self else { return }
-            self.pendingBuffer += text
-            
-            self.updateWorkItem?.cancel()
-            let workItem = DispatchWorkItem { [weak self] in
-                guard let self = self else { return }
-                let chunk = self.pendingBuffer
-                self.pendingBuffer = ""
-                let cleaned = self.cleanANSI(chunk)
-                guard !cleaned.isEmpty else { return }
+    private func appendOutput(_ text: String) {
+        if let lastIndex = self.history.indices.last {
+            if self.history[lastIndex].command == "system" {
+                self.history.append(CommandHistoryItem(command: "output", output: text))
+            } else {
+                var currentOutput = self.history[lastIndex].output + text
+                let lastCmd = self.history[lastIndex].command
                 
-                DispatchQueue.main.async {
-                    if let lastIndex = self.history.indices.last {
-                        if self.history[lastIndex].command == "system" {
-                            self.history.append(CommandHistoryItem(command: "output", output: cleaned))
-                        } else {
-                            var currentOutput = self.history[lastIndex].output + cleaned
-                            let lastCmd = self.history[lastIndex].command
-                            
-                            // 去重：消除远端终端在首行自动回显的命令字符
-                            if currentOutput.hasPrefix(lastCmd + "\n") {
-                                currentOutput = String(currentOutput.dropFirst(lastCmd.count + 1))
-                            } else if currentOutput.hasPrefix(lastCmd) && currentOutput.contains("\n") {
-                                let lines = currentOutput.components(separatedBy: "\n")
-                                if lines.first?.trimmingCharacters(in: .whitespaces) == lastCmd {
-                                    currentOutput = lines.dropFirst().joined(separator: "\n")
-                                }
-                            }
-                            self.history[lastIndex].output = currentOutput
-                        }
-                    } else {
-                        self.history.append(CommandHistoryItem(command: "output", output: cleaned))
+                // 去重：消除回显首行命令
+                if currentOutput.hasPrefix(lastCmd + "\n") {
+                    currentOutput = String(currentOutput.dropFirst(lastCmd.count + 1))
+                } else if currentOutput.hasPrefix(lastCmd) && currentOutput.contains("\n") {
+                    let lines = currentOutput.components(separatedBy: "\n")
+                    if lines.first?.trimmingCharacters(in: .whitespaces) == lastCmd {
+                        currentOutput = lines.dropFirst().joined(separator: "\n")
                     }
                 }
+                self.history[lastIndex].output = currentOutput
             }
-            self.updateWorkItem = workItem
-            // 35ms 聚合一次，兼顾流畅度与打字实时性
-            self.updateQueue.asyncAfter(deadline: .now() + 0.035, execute: workItem)
+        } else {
+            self.history.append(CommandHistoryItem(command: "output", output: text))
         }
     }
 

@@ -1,146 +1,142 @@
 import SwiftUI
-import UIKit
+
+// 快捷命令结构体（带中文说明）
+struct QuickCmd: Identifiable {
+    let id = UUID()
+    let name: String   // 中文标签
+    let cmd: String    // 实际命令
+}
 
 struct TerminalView: View {
-    @ObservedObject var store: ServerStore
-    let profile: ServerProfile
-
+    let serverName: String
     @StateObject private var session = SSHSession()
-    @State private var commandText = ""
-    @State private var showingAddQuickCommand = false
-    @State private var newQuickCommand = ""
+    @State private var inputCommand: String = ""
+    @FocusState private var isInputFocused: Bool
+    
+    // 带中文说明的常用快捷键列表
+    let quickCommands: [QuickCmd] = [
+        QuickCmd(name: "查看文件 (ls)", cmd: "ls -la"),
+        QuickCmd(name: "磁盘空间 (df)", cmd: "df -h"),
+        QuickCmd(name: "资源占用 (top)", cmd: "top -bn1 | head -n 20"),
+        QuickCmd(name: "当前用户 (whoami)", cmd: "whoami"),
+        QuickCmd(name: "当前目录 (pwd)", cmd: "pwd"),
+        QuickCmd(name: "系统信息 (uname)", cmd: "uname -a"),
+        QuickCmd(name: "内存使用 (free)", cmd: "free -h"),
+        QuickCmd(name: "监听端口 (port)", cmd: "ss -tulpn | head -n 15")
+    ]
 
     var body: some View {
         VStack(spacing: 0) {
-            quickCommandsBar
+            // 顶部带中文说明的横向滚动快捷栏
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(quickCommands) { item in
+                        Button(action: {
+                            runCommand(item.cmd)
+                        }) {
+                            Text(item.name)
+                                .font(.system(size: 12, weight: .medium))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color(.systemGray5))
+                                .foregroundColor(.primary)
+                                .cornerRadius(6)
+                        }
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+            }
+            .background(Color(.systemBackground))
 
+            // 终端黑色输出窗口
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(session.blocks) { block in
-                            blockView(block)
-                                .id(block.id)
-                        }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(session.terminalOutput.isEmpty ? "Connecting to \(serverName)...\n" : session.terminalOutput)
+                            .font(.system(size: 13, design: .monospaced))
+                            .foregroundColor(.green)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .id("BOTTOM")
                     }
                     .padding()
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, minHeight: 450, alignment: .topLeading)
                 }
                 .background(Color.black)
-                .onChange(of: session.blocks.count) { _ in
-                    if let last = session.blocks.last {
-                        withAnimation {
-                            proxy.scrollTo(last.id, anchor: .bottom)
-                        }
+                // 1. 点空白区域收起键盘
+                .onTapGesture {
+                    isInputFocused = false
+                }
+                // 2. 屏幕滑动时交互收起键盘
+                .scrollDismissesKeyboard(.interactively)
+                .onChange(of: session.terminalOutput) { _ in
+                    withAnimation {
+                        proxy.scrollTo("BOTTOM", anchor: .bottom)
                     }
                 }
             }
 
-            Divider()
-
-            HStack {
-                TextField("输入命令", text: $commandText)
-                    .textInputAutocapitalization(.never)
+            // 底部命令行输入框
+            HStack(spacing: 8) {
+                TextField("输入 Linux 命令...", text: $inputCommand)
+                    .focused($isInputFocused)
+                    .textFieldStyle(PlainTextFieldStyle())
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(8)
                     .autocorrectionDisabled()
-                    .font(.system(.body, design: .monospaced))
-                    .onSubmit { sendCommand() }
+                    .textInputAutocapitalization(.never)
+                    .onSubmit {
+                        executeCurrentInput()
+                    }
 
-                Button("发送") { sendCommand() }
-                    .disabled(commandText.isEmpty || !session.connected)
+                Button(action: {
+                    executeCurrentInput()
+                }) {
+                    Text("发送")
+                        .bold()
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .foregroundColor(.white)
+                        .background(Color.blue)
+                        .cornerRadius(8)
+                }
             }
             .padding()
+            .background(Color(.systemBackground))
         }
-        .navigationTitle(profile.name)
+        .navigationTitle(serverName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button(session.connected ? "断开" : "连接") {
-                    toggleConnection()
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(session.isConnected ? "断开" : "连接") {
+                    if session.isConnected {
+                        session.disconnect()
+                    } else {
+                        session.connect()
+                    }
                 }
             }
         }
-        .task {
-            if !session.connected {
-                await session.connect(profile: profile)
-            }
+        .onAppear {
+            session.connect()
         }
         .onDisappear {
-            Task { await session.disconnect() }
+            session.disconnect()
         }
     }
 
-    private var quickCommandsBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(store.quickCommands, id: \.self) { command in
-                    Button(command) {
-                        commandText = command
-                        sendCommand()
-                    }
-                    .buttonStyle(.bordered)
-                    .font(.system(.footnote, design: .monospaced))
-                }
-
-                Button {
-                    showingAddQuickCommand = true
-                } label: {
-                    Image(systemName: "plus.circle")
-                }
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-        }
-        .background(Color(.secondarySystemBackground))
-        .alert("添加常用命令", isPresented: $showingAddQuickCommand) {
-            TextField("命令内容", text: $newQuickCommand)
-            Button("取消", role: .cancel) { newQuickCommand = "" }
-            Button("添加") {
-                store.addQuickCommand(newQuickCommand)
-                newQuickCommand = ""
-            }
-        }
+    private func executeCurrentInput() {
+        let cmd = inputCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cmd.isEmpty else { return }
+        runCommand(cmd)
+        inputCommand = ""
     }
 
-    private func blockView(_ block: SSHBlock) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("$ \(block.command)")
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(.green)
-
-                Spacer()
-
-                Button {
-                    UIPasteboard.general.string = block.output.isEmpty ? block.command : block.output
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                        .foregroundStyle(.gray)
-                }
-            }
-
-            if !block.output.isEmpty {
-                Text(block.output)
-                    .font(.system(.footnote, design: .monospaced))
-                    .foregroundStyle(.white)
-                    .textSelection(.enabled)
-            }
-
-            Divider()
-                .background(Color.gray.opacity(0.3))
-        }
-    }
-
-    private func sendCommand() {
-        guard !commandText.isEmpty else { return }
-        let command = commandText
-        commandText = ""
-        session.runCommand(command)
-    }
-
-    private func toggleConnection() {
-        if session.connected {
-            Task { await session.disconnect() }
-        } else {
-            Task { await session.connect(profile: profile) }
-        }
+    private func runCommand(_ cmd: String) {
+        // 执行命令时自动隐藏键盘，避免遮挡输出
+        isInputFocused = false
+        session.sendCommand(cmd)
     }
 }

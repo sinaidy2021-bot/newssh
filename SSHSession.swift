@@ -12,7 +12,6 @@ class SSHSession: ObservableObject {
     var username: String = "root"
     var password: String = ""
 
-    // 清洗 ANSI 颜色码
     private func cleanANSI(_ raw: String) -> String {
         var text = raw.replacingOccurrences(
             of: #"(\x1B\[|\x9B|\u001b\[)[0-?]*[ -/]*[@-~]"#,
@@ -35,10 +34,13 @@ class SSHSession: ObservableObject {
         
         Task {
             do {
+                // 适配最新 Citadel 的参数要求（加入 reconnect: false）
                 let client = try await SSHClient.connect(
                     host: self.host,
+                    port: .init(integerLiteral: self.port),
                     authenticationMethod: .passwordBased(username: self.username, password: self.password),
-                    hostKeyValidator: .acceptAnything()
+                    hostKeyValidator: .acceptAnything(),
+                    reconnect: false
                 )
                 
                 await MainActor.run {
@@ -65,13 +67,9 @@ class SSHSession: ObservableObject {
 
         Task {
             do {
-                let stream = try await client.executeCommand("export TERM=xterm-256color; " + cmdToSend)
-                var result = ""
-                for try await chunk in stream {
-                    if let str = String(buffer: chunk) {
-                        result += str
-                    }
-                }
+                // 使用最基础安全的 executeCommand，避免直接遍历 ByteBuffer 异步流引发的类型不匹配
+                let output = try await client.executeCommand("export TERM=xterm-256color; " + cmdToSend)
+                let result = String(buffer: output)
                 
                 let cleaned = cleanANSI(result)
                 await MainActor.run {

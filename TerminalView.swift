@@ -8,6 +8,11 @@ struct QuickCmd: Identifiable {
 
 struct TerminalView: View {
     let serverName: String
+    let host: String
+    let port: Int
+    let username: String
+    let password: String
+
     @StateObject private var session = SSHSession()
     @State private var inputCommand: String = ""
     @FocusState private var isInputFocused: Bool
@@ -18,9 +23,7 @@ struct TerminalView: View {
         QuickCmd(name: "资源占用 (top)", cmd: "top -bn1 | head -n 20"),
         QuickCmd(name: "当前用户 (whoami)", cmd: "whoami"),
         QuickCmd(name: "当前目录 (pwd)", cmd: "pwd"),
-        QuickCmd(name: "系统信息 (uname)", cmd: "uname -a"),
-        QuickCmd(name: "内存使用 (free)", cmd: "free -h"),
-        QuickCmd(name: "监听端口 (port)", cmd: "ss -tulpn | head -n 15")
+        QuickCmd(name: "系统信息 (uname)", cmd: "uname -a")
     ]
 
     var body: some View {
@@ -49,7 +52,7 @@ struct TerminalView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(session.terminalOutput.isEmpty ? "正在连接到服务器...\n" : session.terminalOutput)
+                        Text(session.terminalOutput.isEmpty ? "正在准备连接...\n" : session.terminalOutput)
                             .font(.system(size: 13, design: .monospaced))
                             .foregroundColor(.green)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -112,18 +115,25 @@ struct TerminalView: View {
                     if session.isConnected {
                         session.disconnect()
                     } else {
-                        session.connect()
+                        connectToServer()
                     }
                 }
             }
         }
         .onAppear {
-            // 如果外部 ServerListView 传入了 host 密码等，可以在这里绑定，如果没有则用默认空
-            session.connect()
+            connectToServer()
         }
         .onDisappear {
             session.disconnect()
         }
+    }
+
+    private func connectToServer() {
+        session.host = host
+        session.port = port
+        session.username = username
+        session.password = password
+        session.connect()
     }
 
     private func executeCurrentInput() {

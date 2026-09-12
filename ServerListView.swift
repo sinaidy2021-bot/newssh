@@ -25,7 +25,13 @@ struct ServerListView: View {
         NavigationView {
             List {
                 ForEach(servers) { server in
-                    NavigationLink(destination: TerminalView(serverName: server.name)) {
+                    NavigationLink(destination: TerminalView(
+                        serverName: server.name,
+                        host: server.host,
+                        port: server.port,
+                        username: server.username,
+                        password: server.password
+                    )) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(server.name)
                                 .font(.headline)

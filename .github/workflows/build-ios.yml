@@ -20,14 +20,14 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Resolve Swift packages
+      - name: Resolve packages
         run: |
           xcodebuild \
             -resolvePackageDependencies \
             -project MySSH.xcodeproj \
             -scheme MySSH
 
-      - name: Build unsigned iOS app
+      - name: Build unsigned app
         run: |
           rm -rf build
 
@@ -39,7 +39,9 @@ jobs:
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
+            CODE_SIGN_IDENTITY="" \
+            SWIFT_OPTIMIZATION_LEVEL="-Onone" \
+            COMPILER_INDEX_STORE_ENABLE=NO
 
       - name: Create IPA
         run: |

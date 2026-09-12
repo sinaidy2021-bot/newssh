@@ -85,12 +85,14 @@ class SSHSession: ObservableObject {
                         }
                         
                         if let text = buffer.getString(at: buffer.readerIndex, length: buffer.readableBytes) {
+                            // 【修复点】：在这里安全解包 self
+                            guard let self = self else { return }
+                            
                             let cleaned = self.cleanANSI(text)
                             guard !cleaned.isEmpty else { continue }
                             
-                            // 实时同步到 UI，彻底摒弃慢速串行队列
                             await MainActor.run {
-                                self?.appendOutput(cleaned)
+                                self.appendOutput(cleaned)
                             }
                         }
                     }
@@ -113,7 +115,6 @@ class SSHSession: ObservableObject {
                 var currentOutput = self.history[lastIndex].output + text
                 let lastCmd = self.history[lastIndex].command
                 
-                // 去重：消除回显首行命令
                 if currentOutput.hasPrefix(lastCmd + "\n") {
                     currentOutput = String(currentOutput.dropFirst(lastCmd.count + 1))
                 } else if currentOutput.hasPrefix(lastCmd) && currentOutput.contains("\n") {

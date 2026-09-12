@@ -51,25 +51,43 @@ struct TerminalView: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(session.terminalOutput.isEmpty ? "正在准备连接...\n" : session.terminalOutput)
-                            .font(.system(size: 13, design: .monospaced))
-                            .foregroundColor(.green)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        // 遍历每一条独立的命令记录块
+                        ForEach(session.history) { item in
+                            VStack(alignment: .leading, spacing: 4) {
+                                if item.command == "system" {
+                                    Text(item.output)
+                                        .font(.system(size: 13, design: .monospaced))
+                                        .foregroundColor(.yellow)
+                                } else {
+                                    // 命令显示为青色
+                                    Text("$ \(item.command)")
+                                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                        .foregroundColor(.cyan)
+                                    
+                                    // 结果显示为绿色，并且自带独立的文本选中/长按复制功能
+                                    Text(item.output)
+                                        .font(.system(size: 13, design: .monospaced))
+                                        .foregroundColor(.green)
+                                        .textSelection(.enabled)
+                                }
+                            }
+                            .padding(.horizontal, 8)
+                            .id(item.id)
+                        }
                         
                         Color.clear
                             .frame(height: 1)
                             .id("BOTTOM_ID")
                     }
                     .padding()
-                    .frame(maxWidth: .infinity, minHeight: 450, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
                 .background(Color.black)
                 .onTapGesture {
                     isInputFocused = false
                 }
-                .onChange(of: session.terminalOutput, perform: { _ in
+                .onChange(of: session.history.count, perform: { _ in
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                         withAnimation {
                             proxy.scrollTo("BOTTOM_ID", anchor: .bottom)
@@ -145,12 +163,6 @@ struct TerminalView: View {
 
     private func runCommand(_ cmd: String) {
         isInputFocused = false
-        if !session.terminalOutput.hasSuffix("\n") && !session.terminalOutput.isEmpty {
-            session.terminalOutput += "\n"
-        }
-        session.terminalOutput += "$ \(cmd)\n"
-        
-        let finalCmd = cmd.hasSuffix("\n") ? cmd : "\(cmd)\n"
-        session.sendCommand(finalCmd)
+        session.sendCommand(cmd)
     }
 }

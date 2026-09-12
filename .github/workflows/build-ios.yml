@@ -54,7 +54,9 @@ jobs:
             build/Build/Products/Release-iphoneos/MySSH.app \
             Payload/MySSH.app
 
-          zip -r MySSH-unsigned.ipa Payload
+          chmod +x Payload/MySSH.app/MySSH
+
+          ditto -c -k --sequesterRsrc --keepParent Payload MySSH-unsigned.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4

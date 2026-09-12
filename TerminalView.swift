@@ -17,8 +17,8 @@ struct TerminalView: View {
     @State private var inputCommand: String = ""
     @FocusState private var isSystemKeyboardFocused: Bool
 
-    // 键盘面板显隐与模式状态
     @State private var showMiniKeyboard: Bool = false
+    @Environment(\.scenePhase) private var scenePhase
 
     // 自定义快捷键
     @State private var quickCommands: [QuickCmd] = []
@@ -113,20 +113,17 @@ struct TerminalView: View {
                 }
             }
 
-            // 3. 隐藏的原生输入框（支持临时拉起系统全键盘）
+            // 3. 隐藏的原生输入框
             TextField("", text: $inputCommand)
                 .focused($isSystemKeyboardFocused)
                 .frame(width: 0, height: 0)
                 .opacity(0)
                 .autocapitalization(.none)
                 .disableAutocorrection(true)
-                .onSubmit {
-                    executeCurrentInput()
-                }
+                .onSubmit { executeCurrentInput() }
 
-            // 4. 定制极简纯黑微型键盘（不透明、小巧、低矮）
+            // 4. 定制纯黑微型键盘面板
             VStack(spacing: 6) {
-                // 顶部状态与呼出栏
                 HStack(spacing: 8) {
                     Button(action: {
                         withAnimation(.easeInOut(duration: 0.2)) {
@@ -145,8 +142,7 @@ struct TerminalView: View {
                         .cornerRadius(5)
                     }
 
-                    // 正在输入命令的即时预览框
-                    Text(inputCommand.isEmpty ? "就绪" : inputCommand)
+                    Text(inputCommand.isEmpty ? (session.isConnected ? "已在线" : "未连接") : inputCommand)
                         .font(.system(size: 13, design: .monospaced))
                         .foregroundColor(inputCommand.isEmpty ? .gray : .green)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -159,7 +155,6 @@ struct TerminalView: View {
                         }
                     }
 
-                    // 发送回车
                     Button(action: { executeCurrentInput() }) {
                         Text("回车")
                             .font(.system(size: 12, weight: .bold))
@@ -173,10 +168,8 @@ struct TerminalView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
 
-                // 展开的微型键盘按键区（实打实的不透明深黑面板）
                 if showMiniKeyboard {
                     VStack(spacing: 6) {
-                        // 第一排：1 到 5 以及常用控制符
                         HStack(spacing: 5) {
                             miniKey("1")
                             miniKey("2")
@@ -189,7 +182,6 @@ struct TerminalView: View {
                             }
                         }
 
-                        // 第二排：6 到 0 以及常用符号
                         HStack(spacing: 5) {
                             miniKey("6")
                             miniKey("7")
@@ -202,15 +194,12 @@ struct TerminalView: View {
                             }
                         }
 
-                        // 第三排：快捷操作与全键盘唤起
                         HStack(spacing: 5) {
                             miniKey("空格") { inputCommand.append(" ") }
                             miniKey("x-ui") { runCommand("x-ui") }
                             miniKey("88") { runCommand("88") }
                             miniKey("退格", icon: "delete.left") {
-                                if !inputCommand.isEmpty {
-                                    inputCommand.removeLast()
-                                }
+                                if !inputCommand.isEmpty { inputCommand.removeLast() }
                             }
                             miniKey("全键盘", icon: "textformat") {
                                 isSystemKeyboardFocused = true
@@ -221,7 +210,7 @@ struct TerminalView: View {
                     .padding(.bottom, 6)
                 }
             }
-            .background(Color(white: 0.08)) // 彻底纯黑不透明
+            .background(Color(white: 0.08))
         }
         .navigationTitle(serverName)
         .navigationBarTitleDisplayMode(.inline)
@@ -261,24 +250,32 @@ struct TerminalView: View {
         }
         .onAppear {
             loadQuickCommands()
-            connectToServer()
+            // 只有未连接时才连接，防止切界面重复断连重连
+            if !session.isConnected {
+                connectToServer()
+            }
         }
-        .onDisappear { session.disconnect() }
+        // 监听进入后台与恢复前台
+        .onChange(of: scenePhase) { phase in
+            switch phase {
+            case .background:
+                session.appDidEnterBackground()
+            case .active:
+                session.appWillEnterForeground()
+            default:
+                break
+            }
+        }
     }
 
-    // 辅助生成小巧按键
     private func miniKey(_ label: String, icon: String? = nil, color: Color = Color(white: 0.22), action: (() -> Void)? = nil) -> some View {
         Button(action: {
-            if let action = action {
-                action()
-            } else {
-                inputCommand.append(label)
-            }
+            if let action = action { action() }
+            else { inputCommand.append(label) }
         }) {
             HStack(spacing: 2) {
                 if let icon = icon {
-                    Image(systemName: icon)
-                        .font(.system(size: 11))
+                    Image(systemName: icon).font(.system(size: 11))
                 }
                 Text(label)
                     .font(.system(size: 13, weight: .medium, design: .monospaced))
@@ -338,7 +335,6 @@ struct TerminalView: View {
         let name = newCmdName.trimmingCharacters(in: .whitespaces)
         let cmd = newCmdContent.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty, !cmd.isEmpty else { return }
-        
         quickCommands.append(QuickCmd(name: name, cmd: cmd))
         saveQuickCommands()
         newCmdName = ""

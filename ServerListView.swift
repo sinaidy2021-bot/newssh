@@ -10,7 +10,6 @@ struct ServerItem: Identifiable {
 }
 
 struct ServerListView: View {
-    // 默认测试服务器配置
     @State private var servers: [ServerItem] = [
         ServerItem(name: "默认测试服务器", host: "127.0.0.1", port: 22, username: "root", password: "")
     ]
@@ -88,7 +87,6 @@ struct ServerListView: View {
         servers.append(server)
         showingAddScreen = false
         
-        // 清空输入
         newName = ""
         newHost = ""
         newPort = "22"
@@ -97,6 +95,6 @@ struct ServerListView: View {
     }
 
     private func deleteServer(at offsets: IndexSet) {
-        servers.remove(atoffsets: offsets)
+        servers.remove(atOffsets: offsets)
     }
 }

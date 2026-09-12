@@ -34,13 +34,12 @@ class SSHSession: ObservableObject {
         
         Task {
             do {
-                // 适配最新 Citadel 的参数要求（加入 reconnect: false）
+                // 彻底去掉不兼容的 reconnect 参数，使用标准安全的参数重载
                 let client = try await SSHClient.connect(
                     host: self.host,
                     port: .init(integerLiteral: self.port),
                     authenticationMethod: .passwordBased(username: self.username, password: self.password),
-                    hostKeyValidator: .acceptAnything(),
-                    reconnect: false
+                    hostKeyValidator: .acceptAnything()
                 )
                 
                 await MainActor.run {
@@ -67,7 +66,6 @@ class SSHSession: ObservableObject {
 
         Task {
             do {
-                // 使用最基础安全的 executeCommand，避免直接遍历 ByteBuffer 异步流引发的类型不匹配
                 let output = try await client.executeCommand("export TERM=xterm-256color; " + cmdToSend)
                 let result = String(buffer: output)
                 

@@ -17,17 +17,14 @@ struct TerminalView: View {
 
     @StateObject private var session = SSHSession()
 
-    // 当前命令
+    // SSH 当前正在输入的命令
     @State private var inputCommand: String = ""
 
-    // 苹果原生键盘的隐藏输入通道
+    // 苹果原生键盘
     @State private var systemKeyboardText: String = ""
     @FocusState private var isSystemKeyboardFocused: Bool
 
-    // 自定义 SSH 软键盘
-    // 默认直接显示
-    @State private var showMiniKeyboard: Bool = true
-
+    // 自定义 SSH 软键盘始终显示
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var quickCommands: [QuickCmd] = []
@@ -93,69 +90,76 @@ struct TerminalView: View {
 
                 // MARK: - 终端
 
-                ZStack(alignment: .bottomLeading) {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(
+                            alignment: .leading,
+                            spacing: 10
+                        ) {
 
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            LazyVStack(
-                                alignment: .leading,
-                                spacing: 10
-                            ) {
+                            ForEach(session.history) { item in
 
-                                ForEach(session.history) { item in
+                                VStack(
+                                    alignment: .leading,
+                                    spacing: 6
+                                ) {
 
-                                    VStack(
-                                        alignment: .leading,
-                                        spacing: 6
-                                    ) {
+                                    if item.command == "system" {
 
-                                        if item.command == "system" {
-
-                                            HStack {
-                                                Text("[系统状态]")
-                                                    .font(
-                                                        .system(
-                                                            size: 11,
-                                                            weight: .bold,
-                                                            design: .monospaced
-                                                        )
+                                        HStack {
+                                            Text("[系统状态]")
+                                                .font(
+                                                    .system(
+                                                        size: 11,
+                                                        weight: .bold,
+                                                        design: .monospaced
                                                     )
-                                                    .foregroundColor(
-                                                        .yellow.opacity(0.8)
-                                                    )
-
-                                                Spacer()
-
-                                                Button(action: {
-                                                    copyBlock(
-                                                        item.output,
-                                                        tip: "已复制系统信息"
-                                                    )
-                                                }) {
-                                                    Image(
-                                                        systemName: "doc.on.doc"
-                                                    )
-                                                    .font(.system(size: 11))
-                                                    .foregroundColor(.gray)
-                                                }
-                                            }
-
-                                            renderOutputLines(
-                                                item.output,
-                                                defaultColor: .yellow
-                                            )
-
-                                        } else {
-
-                                            // 命令行
-                                            HStack(
-                                                alignment: .center,
-                                                spacing: 4
-                                            ) {
-
-                                                Text(
-                                                    "\(item.prompt.isEmpty ? session.currentPrompt : item.prompt) "
                                                 )
+                                                .foregroundColor(
+                                                    .yellow.opacity(0.8)
+                                                )
+
+                                            Spacer()
+
+                                            Button(action: {
+                                                copyBlock(
+                                                    item.output,
+                                                    tip: "已复制系统信息"
+                                                )
+                                            }) {
+                                                Image(
+                                                    systemName: "doc.on.doc"
+                                                )
+                                                .font(.system(size: 11))
+                                                .foregroundColor(.gray)
+                                            }
+                                        }
+
+                                        renderOutputLines(
+                                            item.output,
+                                            defaultColor: .yellow
+                                        )
+
+                                    } else {
+
+                                        HStack(
+                                            alignment: .center,
+                                            spacing: 4
+                                        ) {
+
+                                            Text(
+                                                "\(item.prompt.isEmpty ? session.currentPrompt : item.prompt) "
+                                            )
+                                            .font(
+                                                .system(
+                                                    size: 13,
+                                                    weight: .bold,
+                                                    design: .monospaced
+                                                )
+                                            )
+                                            .foregroundColor(.cyan)
+
+                                            Text(item.command)
                                                 .font(
                                                     .system(
                                                         size: 13,
@@ -163,162 +167,132 @@ struct TerminalView: View {
                                                         design: .monospaced
                                                     )
                                                 )
-                                                .foregroundColor(.cyan)
+                                                .foregroundColor(.white)
+                                                .textSelection(.enabled)
 
-                                                Text(item.command)
-                                                    .font(
-                                                        .system(
-                                                            size: 13,
-                                                            weight: .bold,
-                                                            design: .monospaced
-                                                        )
+                                            Spacer(minLength: 4)
+
+                                            Button(action: {
+                                                let prompt = item.prompt.isEmpty
+                                                    ? session.currentPrompt
+                                                    : item.prompt
+
+                                                let fullBlock =
+                                                    "\(prompt) \(item.command)\n" +
+                                                    item.output
+
+                                                copyBlock(
+                                                    fullBlock,
+                                                    tip: "已复制整段命令与输出"
+                                                )
+                                            }) {
+                                                HStack(spacing: 3) {
+                                                    Image(
+                                                        systemName: "doc.on.doc"
                                                     )
-                                                    .foregroundColor(.white)
-                                                    .textSelection(.enabled)
-
-                                                Spacer(minLength: 4)
-
-                                                Button(action: {
-                                                    let prompt = item.prompt.isEmpty
-                                                        ? session.currentPrompt
-                                                        : item.prompt
-
-                                                    let fullBlock =
-                                                        "\(prompt) \(item.command)\n" +
-                                                        item.output
-
-                                                    copyBlock(
-                                                        fullBlock,
-                                                        tip: "已复制整段命令与输出"
-                                                    )
-                                                }) {
-                                                    HStack(spacing: 3) {
-                                                        Image(
-                                                            systemName: "doc.on.doc"
-                                                        )
-                                                        Text("复制整段")
-                                                    }
-                                                    .font(
-                                                        .system(
-                                                            size: 10,
-                                                            weight: .medium
-                                                        )
-                                                    )
-                                                    .foregroundColor(.gray)
-                                                    .padding(.horizontal, 6)
-                                                    .padding(.vertical, 3)
-                                                    .background(
-                                                        Color(white: 0.18)
-                                                    )
-                                                    .cornerRadius(4)
+                                                    Text("复制整段")
                                                 }
-                                            }
-
-                                            renderOutputLines(
-                                                item.output,
-                                                defaultColor: .green
-                                            )
-
-                                            // 每一个命令块都有：
-                                            // 复制本段输出
-                                            // 复制整段
-                                            HStack(spacing: 6) {
-
-                                                Button(action: {
-                                                    copyBlock(
-                                                        item.output,
-                                                        tip: "已复制本段输出"
+                                                .font(
+                                                    .system(
+                                                        size: 10,
+                                                        weight: .medium
                                                     )
-                                                }) {
-                                                    HStack(spacing: 4) {
-                                                        Image(
-                                                            systemName: "doc.on.doc"
-                                                        )
-                                                        Text("复制本段输出")
-                                                    }
-                                                    .font(
-                                                        .system(
-                                                            size: 10,
-                                                            weight: .medium
-                                                        )
-                                                    )
-                                                    .foregroundColor(.gray)
-                                                    .padding(
-                                                        .horizontal,
-                                                        7
-                                                    )
-                                                    .padding(
-                                                        .vertical,
-                                                        4
-                                                    )
-                                                    .background(
-                                                        Color(white: 0.16)
-                                                    )
-                                                    .cornerRadius(4)
-                                                }
-
-                                                Button(action: {
-                                                    let prompt = item.prompt.isEmpty
-                                                        ? session.currentPrompt
-                                                        : item.prompt
-
-                                                    let fullBlock =
-                                                        "\(prompt) \(item.command)\n" +
-                                                        item.output
-
-                                                    copyBlock(
-                                                        fullBlock,
-                                                        tip: "已复制整段"
-                                                    )
-                                                }) {
-                                                    HStack(spacing: 4) {
-                                                        Image(
-                                                            systemName: "doc.on.doc.fill"
-                                                        )
-                                                        Text("复制整段")
-                                                    }
-                                                    .font(
-                                                        .system(
-                                                            size: 10,
-                                                            weight: .medium
-                                                        )
-                                                    )
-                                                    .foregroundColor(.gray)
-                                                    .padding(
-                                                        .horizontal,
-                                                        7
-                                                    )
-                                                    .padding(
-                                                        .vertical,
-                                                        4
-                                                    )
-                                                    .background(
-                                                        Color(white: 0.16)
-                                                    )
-                                                    .cornerRadius(4)
-                                                }
-
-                                                Spacer()
+                                                )
+                                                .foregroundColor(.gray)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 3)
+                                                .background(
+                                                    Color(white: 0.18)
+                                                )
+                                                .cornerRadius(4)
                                             }
                                         }
-                                    }
-                                    .padding(8)
-                                    .background(Color(white: 0.05))
-                                    .cornerRadius(6)
-                                    .id(item.id)
-                                }
 
-                                // MARK: - 当前最新 Prompt
-
-                                if session.isConnected {
-                                    HStack(
-                                        alignment: .top,
-                                        spacing: 4
-                                    ) {
-
-                                        Text(
-                                            session.currentPrompt
+                                        renderOutputLines(
+                                            item.output,
+                                            defaultColor: .green
                                         )
+
+                                        HStack(spacing: 6) {
+
+                                            Button(action: {
+                                                copyBlock(
+                                                    item.output,
+                                                    tip: "已复制本段输出"
+                                                )
+                                            }) {
+                                                HStack(spacing: 4) {
+                                                    Image(
+                                                        systemName: "doc.on.doc"
+                                                    )
+                                                    Text("复制本段输出")
+                                                }
+                                                .font(
+                                                    .system(
+                                                        size: 10,
+                                                        weight: .medium
+                                                    )
+                                                )
+                                                .foregroundColor(.gray)
+                                                .padding(.horizontal, 7)
+                                                .padding(.vertical, 4)
+                                                .background(
+                                                    Color(white: 0.16)
+                                                )
+                                                .cornerRadius(4)
+                                            }
+
+                                            Button(action: {
+                                                let prompt = item.prompt.isEmpty
+                                                    ? session.currentPrompt
+                                                    : item.prompt
+
+                                                let fullBlock =
+                                                    "\(prompt) \(item.command)\n" +
+                                                    item.output
+
+                                                copyBlock(
+                                                    fullBlock,
+                                                    tip: "已复制整段"
+                                                )
+                                            }) {
+                                                HStack(spacing: 4) {
+                                                    Image(
+                                                        systemName: "doc.on.doc.fill"
+                                                    )
+                                                    Text("复制整段")
+                                                }
+                                                .font(
+                                                    .system(
+                                                        size: 10,
+                                                        weight: .medium
+                                                    )
+                                                )
+                                                .foregroundColor(.gray)
+                                                .padding(.horizontal, 7)
+                                                .padding(.vertical, 4)
+                                                .background(
+                                                    Color(white: 0.16)
+                                                )
+                                                .cornerRadius(4)
+                                            }
+
+                                            Spacer()
+                                        }
+                                    }
+                                }
+                                .padding(8)
+                                .background(Color(white: 0.05))
+                                .cornerRadius(6)
+                                .id(item.id)
+                            }
+
+                            // MARK: - 当前输入行
+
+                            if session.isConnected {
+                                HStack(spacing: 4) {
+
+                                    Text(session.currentPrompt)
                                         .font(
                                             .system(
                                                 size: 13,
@@ -328,58 +302,64 @@ struct TerminalView: View {
                                         )
                                         .foregroundColor(.cyan)
 
-                                        Text(inputCommand)
-                                            .font(
-                                                .system(
-                                                    size: 13,
-                                                    design: .monospaced
-                                                )
+                                    Text(inputCommand)
+                                        .font(
+                                            .system(
+                                                size: 13,
+                                                design: .monospaced
                                             )
-                                            .foregroundColor(.white)
+                                        )
+                                        .foregroundColor(.white)
 
-                                        // 当前光标
-                                        Rectangle()
-                                            .fill(Color.green)
-                                            .frame(
-                                                width: 7,
-                                                height: 15
-                                            )
-                                            .opacity(0.8)
+                                    Rectangle()
+                                        .fill(Color.green)
+                                        .frame(width: 7, height: 15)
+                                        .opacity(0.8)
 
-                                        Spacer()
-                                    }
-                                    .padding(.horizontal, 8)
-                                    .padding(.top, 2)
-                                    .id("CURRENT_PROMPT")
+                                    Spacer()
                                 }
-
-                                Color.clear
-                                    .frame(height: 8)
-                                    .id("BOTTOM_ANCHOR")
+                                .padding(.horizontal, 8)
+                                .padding(.top, 2)
+                                .id("CURRENT_PROMPT")
                             }
-                            .padding(8)
-                            .frame(
-                                maxWidth: .infinity,
-                                alignment: .topLeading
-                            )
+
+                            Color.clear
+                                .frame(height: 8)
+                                .id("BOTTOM_ANCHOR")
                         }
-                        .background(Color.black)
-                        .onChange(of: session.history.count) { _ in
-                            scrollToBottom(proxy: proxy)
-                        }
-                        .onChange(of: session.history.last?.output) { _ in
-                            scrollToBottom(proxy: proxy)
-                        }
-                        .onChange(of: session.currentPrompt) { _ in
-                            scrollToBottom(proxy: proxy)
-                        }
-                        .onChange(of: inputCommand) { _ in
-                            scrollToCurrentCommand(proxy: proxy)
-                        }
+                        .padding(8)
+                        .frame(
+                            maxWidth: .infinity,
+                            alignment: .topLeading
+                        )
                     }
+                    .background(Color.black)
+                    .onChange(of: session.history.count) { _ in
+                        scrollToBottom(proxy: proxy)
+                    }
+                    .onChange(of: session.history.last?.output) { _ in
+                        scrollToBottom(proxy: proxy)
+                    }
+                    .onChange(of: session.currentPrompt) { _ in
+                        scrollToBottom(proxy: proxy)
+                    }
+                    .onChange(of: inputCommand) { _ in
+                        scrollToCurrentCommand(proxy: proxy)
+                    }
+                }
 
-                    // MARK: - 左下角苹果键盘按钮
+                // MARK: - 紧凑 SSH 软键盘
 
+                compactKeyboard
+                    .background(Color(white: 0.08))
+            }
+
+            // MARK: - 左下角苹果键盘按钮
+
+            VStack {
+                Spacer()
+
+                HStack {
                     Button(action: {
                         toggleSystemKeyboard()
                     }) {
@@ -388,62 +368,43 @@ struct TerminalView: View {
                                 ? "keyboard.chevron.compact.down"
                                 : "keyboard"
                         )
-                        .font(
-                            .system(
-                                size: 16,
-                                weight: .semibold
-                            )
-                        )
+                        .font(.system(size: 15, weight: .bold))
                         .foregroundColor(.white)
-                        .frame(
-                            width: 40,
-                            height: 40
-                        )
-                        .background(
-                            Color.gray.opacity(0.75)
-                        )
+                        .frame(width: 40, height: 40)
+                        .background(Color(white: 0.22))
                         .clipShape(Circle())
                     }
-                    .padding(.leading, 9)
-                    .padding(.bottom, 8)
+                    .padding(.leading, 8)
+                    .padding(.bottom, 6)
+
+                    Spacer()
                 }
-
-                // MARK: - 隐藏的苹果原生键盘输入通道
-                //
-                // 这里没有可见输入框。
-                // 只负责让 iPhone 原生键盘能够输入普通文字。
-
-                hiddenSystemInput
-
-                // MARK: - 自定义 SSH 软键盘
-                //
-                // 默认一直显示。
-                // 不再有中间输入框。
-
-                sshMiniKeyboard
             }
 
-            // MARK: - Toast
+            // MARK: - 隐藏的苹果输入框
+            //
+            // 这里只负责接收 iPhone 原生键盘输入。
+            // 真正执行 SSH 命令仍然走 inputCommand -> sendCommand。
 
-            if let tip = copiedTip {
-                VStack {
-                    Spacer()
+            VStack {
+                Spacer()
 
-                    Text(tip)
-                        .font(
-                            .system(
-                                size: 12,
-                                weight: .medium
-                            )
-                        )
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(Color.black.opacity(0.85))
-                        .cornerRadius(20)
-                        .padding(.bottom, 60)
-                }
-                .transition(.opacity)
+                TextField("", text: $systemKeyboardText)
+                    .focused($isSystemKeyboardFocused)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled(true)
+                    .submitLabel(.return)
+                    .onSubmit {
+                        executeCurrentInput()
+                    }
+                    .onChange(of: systemKeyboardText) { value in
+                        if value != inputCommand {
+                            inputCommand = value
+                        }
+                    }
+                    .frame(width: 2, height: 2)
+                    .opacity(0.01)
+                    .padding(.bottom, 2)
             }
         }
         .navigationTitle(serverName)
@@ -525,11 +486,6 @@ struct TerminalView: View {
             if !session.isConnected {
                 connectToServer()
             }
-
-            // 进入终端时：
-            // 自定义 SSH 键盘直接显示
-            // 苹果键盘绝不自动弹出
-            isSystemKeyboardFocused = false
         }
         .onChange(of: scenePhase) { phase in
             switch phase {
@@ -543,83 +499,26 @@ struct TerminalView: View {
                 break
             }
         }
-        .onChange(of: systemKeyboardText) { newValue in
-            // 苹果原生键盘输入 → 当前命令
-            if newValue != inputCommand {
-                inputCommand = newValue
-            }
-        }
     }
 
-    // MARK: - 隐藏的苹果原生键盘输入
+    // MARK: - 紧凑软键盘
 
-    private var hiddenSystemInput: some View {
+    private var compactKeyboard: some View {
+        VStack(spacing: 3) {
 
-        TextField(
-            "",
-            text: $systemKeyboardText
-        )
-        .focused(
-            $isSystemKeyboardFocused
-        )
-        .textInputAutocapitalization(.never)
-        .autocorrectionDisabled(true)
-        .submitLabel(.return)
-        .onSubmit {
-            executeCurrentInput()
-        }
-        .frame(
-            width: 1,
-            height: 1
-        )
-        .opacity(0.01)
-        .allowsHitTesting(false)
-    }
-
-    // MARK: - 唤起 / 隐藏苹果键盘
-
-    private func toggleSystemKeyboard() {
-
-        if isSystemKeyboardFocused {
-
-            // 隐藏苹果键盘
-
-            isSystemKeyboardFocused = false
-
-        } else {
-
-            // 当前自定义软键盘输入同步给系统输入通道
-            systemKeyboardText = inputCommand
-
-            // 唤起苹果键盘
-            isSystemKeyboardFocused = true
-        }
-    }
-
-    // MARK: - 自定义 SSH 软键盘
-
-    private var sshMiniKeyboard: some View {
-
-        VStack(spacing: 5) {
-
-            // 第一行：0 - 9
-
-            HStack(spacing: 4) {
+            // 数字
+            HStack(spacing: 3) {
                 ForEach(
-                    [
-                        "1", "2", "3", "4", "5",
-                        "6", "7", "8", "9", "0"
-                    ],
+                    ["1", "2", "3", "4", "5",
+                     "6", "7", "8", "9", "0"],
                     id: \.self
                 ) { value in
-
                     miniKey(value)
                 }
             }
 
-            // Ctrl 第一组
-
-            HStack(spacing: 4) {
+            // Ctrl
+            HStack(spacing: 3) {
 
                 miniKey(
                     "Ctrl+C",
@@ -629,69 +528,43 @@ struct TerminalView: View {
                     session.sendRaw("\u{03}")
                 }
 
-                miniKey(
-                    "Ctrl+D",
-                    hint: "退出/EOF"
-                ) {
+                miniKey("Ctrl+D", hint: "退出") {
                     session.sendRaw("\u{04}")
                 }
 
-                miniKey(
-                    "Ctrl+L",
-                    hint: "清屏"
-                ) {
+                miniKey("Ctrl+L", hint: "清屏") {
                     session.sendRaw("\u{0C}")
                 }
 
-                miniKey(
-                    "Ctrl+Z",
-                    hint: "挂起"
-                ) {
+                miniKey("Ctrl+Z", hint: "挂起") {
                     session.sendRaw("\u{1A}")
                 }
             }
 
-            // Ctrl 第二组
+            // 编辑
+            HStack(spacing: 3) {
 
-            HStack(spacing: 4) {
-
-                miniKey(
-                    "Ctrl+A",
-                    hint: "行首"
-                ) {
+                miniKey("Ctrl+A", hint: "行首") {
                     session.sendRaw("\u{01}")
                 }
 
-                miniKey(
-                    "Ctrl+E",
-                    hint: "行尾"
-                ) {
+                miniKey("Ctrl+E", hint: "行尾") {
                     session.sendRaw("\u{05}")
                 }
 
-                miniKey(
-                    "Ctrl+U",
-                    hint: "清前"
-                ) {
+                miniKey("Ctrl+U", hint: "清前") {
                     session.sendRaw("\u{15}")
                 }
 
-                miniKey(
-                    "Ctrl+K",
-                    hint: "清后"
-                ) {
+                miniKey("Ctrl+K", hint: "清后") {
                     session.sendRaw("\u{0B}")
                 }
             }
 
-            // Tab / Esc / 方向键
+            // Tab / Esc / 方向
+            HStack(spacing: 3) {
 
-            HStack(spacing: 4) {
-
-                miniKey(
-                    "Tab",
-                    hint: "补全"
-                ) {
+                miniKey("Tab", hint: "补全") {
                     session.sendRaw("\t")
                 }
 
@@ -703,87 +576,41 @@ struct TerminalView: View {
                     session.sendRaw("\u{1B}")
                 }
 
-                miniKey(
-                    "↑",
-                    hint: "上一条"
-                ) {
+                miniKey("↑", hint: "上一条") {
                     session.sendRaw("\u{1B}[A")
                 }
 
-                miniKey(
-                    "↓",
-                    hint: "下一条"
-                ) {
+                miniKey("↓", hint: "下一条") {
                     session.sendRaw("\u{1B}[B")
                 }
 
-                miniKey(
-                    "←",
-                    hint: "左移"
-                ) {
+                miniKey("←", hint: "左移") {
                     session.sendRaw("\u{1B}[D")
                 }
 
-                miniKey(
-                    "→",
-                    hint: "右移"
-                ) {
+                miniKey("→", hint: "右移") {
                     session.sendRaw("\u{1B}[C")
                 }
             }
 
-            // 常用 Linux 符号
-
-            HStack(spacing: 4) {
-
-                miniKey("/") {
-                    inputCommand.append("/")
-                    syncSystemInput()
-                }
-
-                miniKey("-") {
-                    inputCommand.append("-")
-                    syncSystemInput()
-                }
-
-                miniKey("_") {
-                    inputCommand.append("_")
-                    syncSystemInput()
-                }
-
-                miniKey(".") {
-                    inputCommand.append(".")
-                    syncSystemInput()
-                }
-
-                miniKey(":") {
-                    inputCommand.append(":")
-                    syncSystemInput()
-                }
-
-                miniKey("|") {
-                    inputCommand.append("|")
-                    syncSystemInput()
-                }
-
-                miniKey("$") {
-                    inputCommand.append("$")
-                    syncSystemInput()
-                }
-
-                miniKey("~") {
-                    inputCommand.append("~")
-                    syncSystemInput()
-                }
+            // 符号
+            HStack(spacing: 3) {
+                miniKey("/")
+                miniKey("-")
+                miniKey("_")
+                miniKey(".")
+                miniKey(":")
+                miniKey("|")
+                miniKey("$")
+                miniKey("~")
             }
 
-            // 常用功能
-
-            HStack(spacing: 4) {
+            // 功能键
+            HStack(spacing: 3) {
 
                 miniKey("空格") {
                     inputCommand.append(" ")
-                    syncSystemInput()
+                    syncNativeInput()
                 }
 
                 miniKey(
@@ -792,7 +619,7 @@ struct TerminalView: View {
                 ) {
                     if !inputCommand.isEmpty {
                         inputCommand.removeLast()
-                        syncSystemInput()
+                        syncNativeInput()
                     }
                 }
 
@@ -821,13 +648,12 @@ struct TerminalView: View {
                 }
             }
         }
-        .padding(.horizontal, 6)
-        .padding(.top, 6)
-        .padding(.bottom, 6)
-        .background(Color(white: 0.08))
+        .padding(.horizontal, 5)
+        .padding(.top, 4)
+        .padding(.bottom, 5)
     }
 
-    // MARK: - Clipboard
+    // MARK: - 粘贴
 
     private func pasteClipboard() {
         guard let pasteString = UIPasteboard.general.string,
@@ -837,19 +663,34 @@ struct TerminalView: View {
         }
 
         inputCommand.append(pasteString)
-
-        syncSystemInput()
-
+        syncNativeInput()
         showToast("已从剪贴板粘贴")
     }
 
-    // MARK: - 同步苹果输入通道
+    // MARK: - 同步苹果键盘输入
 
-    private func syncSystemInput() {
-        systemKeyboardText = inputCommand
+    private func syncNativeInput() {
+        if systemKeyboardText != inputCommand {
+            systemKeyboardText = inputCommand
+        }
     }
 
-    // MARK: - Copy
+    // MARK: - 苹果键盘开关
+
+    private func toggleSystemKeyboard() {
+        if isSystemKeyboardFocused {
+            isSystemKeyboardFocused = false
+            return
+        }
+
+        systemKeyboardText = inputCommand
+
+        DispatchQueue.main.async {
+            isSystemKeyboardFocused = true
+        }
+    }
+
+    // MARK: - 复制
 
     private func copyBlock(
         _ text: String,
@@ -859,7 +700,7 @@ struct TerminalView: View {
         showToast(tip)
     }
 
-    // MARK: - Output Rendering
+    // MARK: - 输出渲染
 
     @ViewBuilder
     private func renderOutputLines(
@@ -885,8 +726,6 @@ struct TerminalView: View {
                     .trimmingCharacters(
                         in: .whitespaces
                     )
-
-                // Prompt 行不生成 key:value 复制按钮
 
                 let isPromptLine =
                     trimmed.range(
@@ -1005,7 +844,7 @@ struct TerminalView: View {
         }
     }
 
-    // MARK: - Mini Keyboard Key
+    // MARK: - 软键
 
     private func miniKey(
         _ label: String,
@@ -1016,27 +855,24 @@ struct TerminalView: View {
     ) -> some View {
 
         Button(action: {
-
             if let action = action {
                 action()
             } else {
                 inputCommand.append(label)
-                syncSystemInput()
+                syncNativeInput()
             }
-
         }) {
-
-            VStack(spacing: 1) {
+            VStack(spacing: 0) {
 
                 if let icon = icon {
                     Image(systemName: icon)
-                        .font(.system(size: 10))
+                        .font(.system(size: 9))
                 }
 
                 Text(label)
                     .font(
                         .system(
-                            size: 11,
+                            size: 10,
                             weight: .medium,
                             design: .monospaced
                         )
@@ -1047,35 +883,33 @@ struct TerminalView: View {
                     Text(hint)
                         .font(
                             .system(
-                                size: 8,
+                                size: 7,
                                 weight: .regular
                             )
                         )
                         .lineLimit(1)
                 }
             }
-            .frame(
-                maxWidth: .infinity
-            )
+            .frame(maxWidth: .infinity)
             .frame(
                 height: hint == nil
-                    ? 34
-                    : 38
+                    ? 29
+                    : 31
             )
             .background(color)
             .foregroundColor(.white)
-            .cornerRadius(6)
+            .cornerRadius(5)
         }
     }
 
-    // MARK: - Scroll
+    // MARK: - 滚动
 
     private func scrollToBottom(
         proxy: ScrollViewProxy
     ) {
         DispatchQueue.main.async {
             withAnimation(
-                .easeOut(duration: 0.15)
+                .easeOut(duration: 0.12)
             ) {
                 proxy.scrollTo(
                     "BOTTOM_ANCHOR",
@@ -1090,7 +924,7 @@ struct TerminalView: View {
     ) {
         DispatchQueue.main.async {
             withAnimation(
-                .easeOut(duration: 0.08)
+                .easeOut(duration: 0.1)
             ) {
                 proxy.scrollTo(
                     "CURRENT_PROMPT",
@@ -1100,7 +934,7 @@ struct TerminalView: View {
         }
     }
 
-    // MARK: - Connect
+    // MARK: - SSH
 
     private func connectToServer() {
         session.host = host
@@ -1109,8 +943,6 @@ struct TerminalView: View {
         session.password = password
         session.connect()
     }
-
-    // MARK: - Execute
 
     private func executeCurrentInput() {
 
@@ -1123,12 +955,13 @@ struct TerminalView: View {
             return
         }
 
+        // 关键：
+        // 这里直接走原来的 SSHSession.sendCommand()
         runCommand(cmd)
 
         inputCommand = ""
         systemKeyboardText = ""
 
-        // 执行后自动隐藏苹果原生键盘
         isSystemKeyboardFocused = false
     }
 
@@ -1156,10 +989,9 @@ struct TerminalView: View {
         }
     }
 
-    // MARK: - Quick Commands
+    // MARK: - 快捷命令
 
     private func loadQuickCommands() {
-
         if let data = UserDefaults.standard.data(
             forKey: storageKey
         ),
@@ -1200,7 +1032,6 @@ struct TerminalView: View {
     }
 
     private func addQuickCmd() {
-
         let name = newCmdName
             .trimmingCharacters(
                 in: .whitespaces
@@ -1240,7 +1071,6 @@ struct TerminalView: View {
     }
 
     private func saveQuickCommands() {
-
         if let encoded = try? JSONEncoder().encode(
             quickCommands
         ) {

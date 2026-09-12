@@ -1,6 +1,5 @@
 import SwiftUI
 
-// 中文快捷命令模型
 struct QuickCmd: Identifiable {
     let id = UUID()
     let name: String
@@ -13,7 +12,6 @@ struct TerminalView: View {
     @State private var inputCommand: String = ""
     @FocusState private var isInputFocused: Bool
 
-    // 中文快捷指令栏
     let quickCommands: [QuickCmd] = [
         QuickCmd(name: "查看文件 (ls)", cmd: "ls -la"),
         QuickCmd(name: "磁盘空间 (df)", cmd: "df -h"),
@@ -27,7 +25,6 @@ struct TerminalView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 顶部快捷命令栏
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(quickCommands) { item in
@@ -49,7 +46,6 @@ struct TerminalView: View {
             }
             .background(Color(.systemBackground))
 
-            // 黑色终端显示区域
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 4) {
@@ -57,8 +53,8 @@ struct TerminalView: View {
                             .font(.system(size: 13, design: .monospaced))
                             .foregroundColor(.green)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled) // 支持长按复制选择
                         
-                        // 底部锚点：强制滚到最下方
                         Color.clear
                             .frame(height: 1)
                             .id("BOTTOM_ID")
@@ -67,21 +63,19 @@ struct TerminalView: View {
                     .frame(maxWidth: .infinity, minHeight: 450, alignment: .topLeading)
                 }
                 .background(Color.black)
-                // 点击黑屏收起键盘 (最兼容写法)
                 .onTapGesture {
                     isInputFocused = false
                 }
-                // 监听输出文字变化，并自动滚动到底部 (兼容所有 iOS 版本写法)
-                .onChange(of: session.terminalOutput, perform: { _ in
+                // 使用标准单参数闭包解决 onChange 报错问题
+                .onChange(of: session.terminalOutput) { _ in
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                         withAnimation {
                             proxy.scrollTo("BOTTOM_ID", anchor: .bottom)
                         }
                     }
-                })
+                }
             }
 
-            // 底部输入栏
             HStack(spacing: 8) {
                 TextField("输入 Linux 命令...", text: $inputCommand)
                     .focused($isInputFocused)
@@ -90,8 +84,9 @@ struct TerminalView: View {
                     .padding(.vertical, 8)
                     .background(Color(.systemGray6))
                     .cornerRadius(8)
-                    .disableAutocorrection(true)
-                    .autocapitalization(.none)
+                    // 使用最新的规范替代旧版 disableAutocorrection
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
                     .onSubmit {
                         executeCurrentInput()
                     }
@@ -141,14 +136,7 @@ struct TerminalView: View {
 
     private func runCommand(_ cmd: String) {
         isInputFocused = false
-        
-        // 本地回显
-        if !session.terminalOutput.hasSuffix("\n") && !session.terminalOutput.isEmpty {
-            session.terminalOutput += "\n"
-        }
-        session.terminalOutput += "$ \(cmd)\n"
-        
-        // 补齐回车
+        // 交互式 PTY 模式下服务器自带回显，直接发生即可
         let finalCmd = cmd.hasSuffix("\n") ? cmd : "\(cmd)\n"
         session.sendCommand(finalCmd)
     }

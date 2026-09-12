@@ -56,12 +56,10 @@ struct TerminalView: View {
                                         .foregroundColor(.yellow)
                                         .textSelection(.enabled)
                                 } else {
-                                    // 完美的 root 提示符
                                     Text("root@\(serverName)~# \(item.command)")
                                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                                         .foregroundColor(.cyan)
                                     
-                                    // 绿色输出区，自带长按分段复制
                                     Text(item.output)
                                         .font(.system(size: 13, design: .monospaced))
                                         .foregroundColor(.green)
@@ -71,17 +69,20 @@ struct TerminalView: View {
                             .padding(.horizontal, 8)
                             .id(item.id)
                         }
-                        Color.clear.frame(height: 1).id("BOTTOM_ID")
+                        // 底部锚点
+                        Color.clear.frame(height: 20).id("BOTTOM_ANCHOR")
                     }
                     .padding()
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
                 .background(Color.black)
                 .onTapGesture { isInputFocused = false }
+                // 监听历史记录条数变化与最后一条输出的动态刷新，双重保障自动滚到底部
                 .onChange(of: session.history.count) { _ in
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        withAnimation { proxy.scrollTo("BOTTOM_ID", anchor: .bottom) }
-                    }
+                    scrollToBottom(proxy: proxy)
+                }
+                .onChange(of: session.history.last?.output) { _ in
+                    scrollToBottom(proxy: proxy)
                 }
             }
 
@@ -121,6 +122,14 @@ struct TerminalView: View {
         }
         .onAppear { connectToServer() }
         .onDisappear { session.disconnect() }
+    }
+
+    private func scrollToBottom(proxy: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.15)) {
+                proxy.scrollTo("BOTTOM_ANCHOR", anchor: .bottom)
+            }
+        }
     }
 
     private func connectToServer() {

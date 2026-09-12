@@ -34,12 +34,13 @@ class SSHSession: ObservableObject {
         
         Task {
             do {
-                // 彻底去掉不兼容的 reconnect 参数，使用标准安全的参数重载
+                // 使用 Citadel 标准签名，reconnect 传 .never
                 let client = try await SSHClient.connect(
                     host: self.host,
                     port: .init(integerLiteral: self.port),
                     authenticationMethod: .passwordBased(username: self.username, password: self.password),
-                    hostKeyValidator: .acceptAnything()
+                    hostKeyValidator: .acceptAnything(),
+                    reconnect: .never
                 )
                 
                 await MainActor.run {

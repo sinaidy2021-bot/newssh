@@ -29,9 +29,7 @@ struct TerminalView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(quickCommands) { item in
-                        Button(action: {
-                            runCommand(item.cmd)
-                        }) {
+                        Button(action: { runCommand(item.cmd) }) {
                             Text(item.name)
                                 .font(.system(size: 12, weight: .medium))
                                 .padding(.horizontal, 10)
@@ -57,13 +55,11 @@ struct TerminalView: View {
                                         .font(.system(size: 13, design: .monospaced))
                                         .foregroundColor(.yellow)
                                 } else {
-                                    // 经典的 root 提示符和命令样式
                                     Text("root@\(serverName):~# \(item.command)")
                                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                                         .foregroundColor(.cyan)
                                     
-                                    // 结果支持独立复制
-                                    Text(item.output.isEmpty ? "..." : item.output)
+                                    Text(item.output)
                                         .font(.system(size: 13, design: .monospaced))
                                         .foregroundColor(.green)
                                         .textSelection(.enabled)
@@ -72,44 +68,32 @@ struct TerminalView: View {
                             .padding(.horizontal, 8)
                             .id(item.id)
                         }
-                        
-                        Color.clear
-                            .frame(height: 1)
-                            .id("BOTTOM_ID")
+                        Color.clear.frame(height: 1).id("BOTTOM_ID")
                     }
                     .padding()
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
                 .background(Color.black)
-                .onTapGesture {
-                    isInputFocused = false
-                }
-                .onChange(of: session.history.count, perform: { _ in
+                .onTapGesture { isInputFocused = false }
+                .onChange(of: session.history.count) { _ in
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        withAnimation {
-                            proxy.scrollTo("BOTTOM_ID", anchor: .bottom)
-                        }
+                        withAnimation { proxy.scrollTo("BOTTOM_ID", anchor: .bottom) }
                     }
-                })
+                }
             }
 
             HStack(spacing: 8) {
                 TextField("输入命令 (如 k)...", text: $inputCommand)
                     .focused($isInputFocused)
                     .textFieldStyle(PlainTextFieldStyle())
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+                    .padding(8)
                     .background(Color(.systemGray6))
                     .cornerRadius(8)
                     .disableAutocorrection(true)
                     .autocapitalization(.none)
-                    .onSubmit {
-                        executeCurrentInput()
-                    }
+                    .onSubmit { executeCurrentInput() }
 
-                Button(action: {
-                    executeCurrentInput()
-                }) {
+                Button(action: { executeCurrentInput() }) {
                     Text("发送")
                         .bold()
                         .padding(.horizontal, 16)
@@ -127,20 +111,13 @@ struct TerminalView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(session.isConnected ? "断开" : "连接") {
-                    if session.isConnected {
-                        session.disconnect()
-                    } else {
-                        connectToServer()
-                    }
+                    if session.isConnected { session.disconnect() }
+                    else { connectToServer() }
                 }
             }
         }
-        .onAppear {
-            connectToServer()
-        }
-        .onDisappear {
-            session.disconnect()
-        }
+        .onAppear { connectToServer() }
+        .onDisappear { session.disconnect() }
     }
 
     private func connectToServer() {

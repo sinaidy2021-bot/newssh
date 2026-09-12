@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct QuickCmd: Identifiable, Codable, Equatable {
     var id = UUID()
@@ -20,197 +21,258 @@ struct TerminalView: View {
     @State private var showMiniKeyboard: Bool = false
     @Environment(\.scenePhase) private var scenePhase
 
-    // 自定义快捷键
     @State private var quickCommands: [QuickCmd] = []
     @State private var showingAddSheet = false
     @State private var newCmdName = ""
     @State private var newCmdContent = ""
+    @State private var copiedTip: String? = nil
 
     private let storageKey = "SavedQuickCommands"
 
     var body: some View {
-        VStack(spacing: 0) {
-            // 1. 顶部自定义快捷键栏
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    Button(action: { showingAddSheet = true }) {
-                        HStack(spacing: 3) {
-                            Image(systemName: "plus")
-                            Text("添加")
-                        }
-                        .font(.system(size: 11, weight: .bold))
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 5)
-                        .background(Color.blue.opacity(0.3))
-                        .foregroundColor(.blue)
-                        .cornerRadius(6)
-                    }
-
-                    ForEach(quickCommands) { item in
-                        Button(action: { runCommand(item.cmd) }) {
-                            Text(item.name)
-                                .font(.system(size: 11, weight: .medium))
-                                .padding(.horizontal, 9)
-                                .padding(.vertical, 5)
-                                .background(Color(white: 0.18))
-                                .foregroundColor(.white)
-                                .cornerRadius(6)
-                        }
-                        .contextMenu {
-                            Button(role: .destructive) {
-                                deleteQuickCmd(item)
-                            } label: {
-                                Label("删除快捷键", systemImage: "trash")
+        ZStack {
+            VStack(spacing: 0) {
+                // 顶部快捷键栏
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        Button(action: { showingAddSheet = true }) {
+                            HStack(spacing: 3) {
+                                Image(systemName: "plus")
+                                Text("添加")
                             }
+                            .font(.system(size: 11, weight: .bold))
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(Color.blue.opacity(0.3))
+                            .foregroundColor(.blue)
+                            .cornerRadius(6)
                         }
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-            }
-            .background(Color(white: 0.12))
 
-            // 2. 终端主体视口
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(session.history) { item in
-                            VStack(alignment: .leading, spacing: 3) {
-                                if item.command == "system" {
-                                    Text(item.output)
-                                        .font(.system(size: 13, design: .monospaced))
-                                        .foregroundColor(.yellow)
-                                        .textSelection(.enabled)
-                                } else {
-                                    Text("root@\(serverName)~# \(item.command)")
-                                        .font(.system(size: 13, weight: .bold, design: .monospaced))
-                                        .foregroundColor(.cyan)
-                                    
-                                    Text(item.output)
-                                        .font(.system(size: 13, design: .monospaced))
-                                        .foregroundColor(.green)
-                                        .textSelection(.enabled)
+                        ForEach(quickCommands) { item in
+                            Button(action: { runCommand(item.cmd) }) {
+                                Text(item.name)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .padding(.horizontal, 9)
+                                    .padding(.vertical, 5)
+                                    .background(Color(white: 0.18))
+                                    .foregroundColor(.white)
+                                    .cornerRadius(6)
+                            }
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    deleteQuickCmd(item)
+                                } label: {
+                                    Label("删除快捷键", systemImage: "trash")
                                 }
                             }
-                            .padding(.horizontal, 4)
-                            .id(item.id)
-                        }
-                        Color.clear.frame(height: 16).id("BOTTOM_ANCHOR")
-                    }
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                }
-                .background(Color.black)
-                .onTapGesture {
-                    showMiniKeyboard = false
-                    isSystemKeyboardFocused = false
-                }
-                .onChange(of: session.history.count) { _ in
-                    scrollToBottom(proxy: proxy)
-                }
-                .onChange(of: session.history.last?.output) { _ in
-                    scrollToBottom(proxy: proxy)
-                }
-            }
-
-            // 3. 隐藏的原生输入框
-            TextField("", text: $inputCommand)
-                .focused($isSystemKeyboardFocused)
-                .frame(width: 0, height: 0)
-                .opacity(0)
-                .autocapitalization(.none)
-                .disableAutocorrection(true)
-                .onSubmit { executeCurrentInput() }
-
-            // 4. 定制纯黑微型键盘面板
-            VStack(spacing: 6) {
-                HStack(spacing: 8) {
-                    Button(action: {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showMiniKeyboard.toggle()
-                        }
-                    }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: showMiniKeyboard ? "chevron.down" : "keyboard")
-                            Text(showMiniKeyboard ? "收起" : "微型键盘")
-                        }
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(.cyan)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color(white: 0.18))
-                        .cornerRadius(5)
-                    }
-
-                    Text(inputCommand.isEmpty ? (session.isConnected ? "已在线" : "未连接") : inputCommand)
-                        .font(.system(size: 13, design: .monospaced))
-                        .foregroundColor(inputCommand.isEmpty ? .gray : .green)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .lineLimit(1)
-
-                    if !inputCommand.isEmpty {
-                        Button(action: { inputCommand = "" }) {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundColor(.gray)
                         }
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                }
+                .background(Color(white: 0.12))
 
-                    Button(action: { executeCurrentInput() }) {
-                        Text("回车")
+                // 终端主体
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 14) {
+                            ForEach(session.history) { item in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    if item.command == "system" {
+                                        HStack {
+                                            Text("[系统状态]")
+                                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                                .foregroundColor(.yellow.opacity(0.8))
+                                            Spacer()
+                                            Button(action: {
+                                                copyBlock(item.output, tip: "已复制系统信息")
+                                            }) {
+                                                Image(systemName: "doc.on.doc")
+                                                    .font(.system(size: 11))
+                                                    .foregroundColor(.gray)
+                                            }
+                                        }
+                                        renderOutputLines(item.output, defaultColor: .yellow)
+                                    } else {
+                                        HStack(alignment: .center) {
+                                            Text("root@\(serverName)~# \(item.command)")
+                                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                                .foregroundColor(.cyan)
+                                                .textSelection(.enabled)
+                                            
+                                            Spacer()
+                                            
+                                            Button(action: {
+                                                let fullBlock = "root@\(serverName)~# \(item.command)\n" + item.output
+                                                copyBlock(fullBlock, tip: "已复制整段命令与输出")
+                                            }) {
+                                                HStack(spacing: 3) {
+                                                    Image(systemName: "doc.on.doc")
+                                                    Text("复制整段")
+                                                }
+                                                .font(.system(size: 10, weight: .medium))
+                                                .foregroundColor(.gray)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 3)
+                                                .background(Color(white: 0.18))
+                                                .cornerRadius(4)
+                                            }
+                                        }
+                                        
+                                        renderOutputLines(item.output, defaultColor: .green)
+                                    }
+                                }
+                                .padding(8)
+                                .background(Color(white: 0.05))
+                                .cornerRadius(6)
+                                .contextMenu {
+                                    Button {
+                                        copyBlock(item.output, tip: "已复制输出内容")
+                                    } label: {
+                                        Label("复制本段输出", systemImage: "doc.on.doc")
+                                    }
+                                    if item.command != "system" {
+                                        Button {
+                                            copyBlock(item.command, tip: "仅复制命令")
+                                        } label: {
+                                            Label("仅复制命令", systemImage: "terminal")
+                                        }
+                                    }
+                                }
+                                .id(item.id)
+                            }
+                            Color.clear.frame(height: 16).id("BOTTOM_ANCHOR")
+                        }
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                    }
+                    .background(Color.black)
+                    .onTapGesture {
+                        showMiniKeyboard = false
+                        isSystemKeyboardFocused = false
+                    }
+                    .onChange(of: session.history.count) { _ in
+                        scrollToBottom(proxy: proxy)
+                    }
+                    .onChange(of: session.history.last?.output) { _ in
+                        scrollToBottom(proxy: proxy)
+                    }
+                }
+
+                // 隐式原生输入框
+                TextField("", text: $inputCommand)
+                    .focused($isSystemKeyboardFocused)
+                    .frame(width: 0, height: 0)
+                    .opacity(0)
+                    .autocapitalization(.none)
+                    .disableAutocorrection(true)
+                    .onSubmit { executeCurrentInput() }
+
+                // 纯黑不透明微型键盘
+                VStack(spacing: 6) {
+                    HStack(spacing: 8) {
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showMiniKeyboard.toggle()
+                            }
+                        }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: showMiniKeyboard ? "chevron.down" : "keyboard")
+                                Text(showMiniKeyboard ? "收起" : "微型键盘")
+                            }
                             .font(.system(size: 12, weight: .bold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 12)
+                            .foregroundColor(.cyan)
+                            .padding(.horizontal, 8)
                             .padding(.vertical, 4)
-                            .background(Color.blue)
+                            .background(Color(white: 0.18))
                             .cornerRadius(5)
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
+                        }
 
-                if showMiniKeyboard {
-                    VStack(spacing: 6) {
-                        HStack(spacing: 5) {
-                            miniKey("1")
-                            miniKey("2")
-                            miniKey("3")
-                            miniKey("4")
-                            miniKey("5")
-                            miniKey("k")
-                            miniKey("Ctrl+C", color: .red) {
-                                session.sendCommand("\u{03}")
+                        Text(inputCommand.isEmpty ? (session.isConnected ? "已在线" : "未连接") : inputCommand)
+                            .font(.system(size: 13, design: .monospaced))
+                            .foregroundColor(inputCommand.isEmpty ? .gray : .green)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .lineLimit(1)
+
+                        if !inputCommand.isEmpty {
+                            Button(action: { inputCommand = "" }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.gray)
                             }
                         }
 
-                        HStack(spacing: 5) {
-                            miniKey("6")
-                            miniKey("7")
-                            miniKey("8")
-                            miniKey("9")
-                            miniKey("0")
-                            miniKey("-")
-                            miniKey("ESC", color: .orange) {
-                                session.sendCommand("\u{1B}")
-                            }
-                        }
-
-                        HStack(spacing: 5) {
-                            miniKey("空格") { inputCommand.append(" ") }
-                            miniKey("x-ui") { runCommand("x-ui") }
-                            miniKey("88") { runCommand("88") }
-                            miniKey("退格", icon: "delete.left") {
-                                if !inputCommand.isEmpty { inputCommand.removeLast() }
-                            }
-                            miniKey("全键盘", icon: "textformat") {
-                                isSystemKeyboardFocused = true
-                            }
+                        Button(action: { executeCurrentInput() }) {
+                            Text("回车")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 4)
+                                .background(Color.blue)
+                                .cornerRadius(5)
                         }
                     }
-                    .padding(.horizontal, 6)
-                    .padding(.bottom, 6)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+
+                    if showMiniKeyboard {
+                        VStack(spacing: 6) {
+                            HStack(spacing: 5) {
+                                miniKey("1")
+                                miniKey("2")
+                                miniKey("3")
+                                miniKey("4")
+                                miniKey("5")
+                                miniKey("k")
+                                miniKey("Ctrl+C", color: .red) {
+                                    session.sendCommand("\u{03}")
+                                }
+                            }
+
+                            HStack(spacing: 5) {
+                                miniKey("6")
+                                miniKey("7")
+                                miniKey("8")
+                                miniKey("9")
+                                miniKey("0")
+                                miniKey("-")
+                                miniKey("ESC", color: .orange) {
+                                    session.sendCommand("\u{1B}")
+                                }
+                            }
+
+                            HStack(spacing: 5) {
+                                miniKey("空格") { inputCommand.append(" ") }
+                                miniKey("x-ui") { runCommand("x-ui") }
+                                miniKey("88") { runCommand("88") }
+                                miniKey("退格", icon: "delete.left") {
+                                    if !inputCommand.isEmpty { inputCommand.removeLast() }
+                                }
+                                miniKey("Aa 全键盘", icon: "textformat") {
+                                    isSystemKeyboardFocused = true
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.bottom, 6)
+                    }
                 }
+                .background(Color(white: 0.08))
             }
-            .background(Color(white: 0.08))
+
+            if let tip = copiedTip {
+                VStack {
+                    Spacer()
+                    Text(tip)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Color.black.opacity(0.85))
+                        .cornerRadius(20)
+                        .padding(.bottom, 60)
+                }
+                .transition(.opacity)
+            }
         }
         .navigationTitle(serverName)
         .navigationBarTitleDisplayMode(.inline)
@@ -250,12 +312,10 @@ struct TerminalView: View {
         }
         .onAppear {
             loadQuickCommands()
-            // 只有未连接时才连接，防止切界面重复断连重连
             if !session.isConnected {
                 connectToServer()
             }
         }
-        // 监听进入后台与恢复前台
         .onChange(of: scenePhase) { phase in
             switch phase {
             case .background:
@@ -265,6 +325,66 @@ struct TerminalView: View {
             default:
                 break
             }
+        }
+    }
+
+    private func copyBlock(_ text: String, tip: String) {
+        UIPasteboard.general.string = text
+        showToast(tip)
+    }
+
+    @ViewBuilder
+    private func renderOutputLines(_ fullText: String, defaultColor: Color) -> some View {
+        let lines = fullText.components(separatedBy: "\n")
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                if line.contains("http://") || line.contains("https://") {
+                    HStack(alignment: .center, spacing: 6) {
+                        Text(line)
+                            .font(.system(size: 13, design: .monospaced))
+                            .foregroundColor(defaultColor)
+                            .textSelection(.enabled)
+                        
+                        Button(action: {
+                            if let url = extractURL(from: line) {
+                                UIPasteboard.general.string = url
+                                showToast("已复制地址: \(url)")
+                            } else {
+                                UIPasteboard.general.string = line
+                                showToast("已复制该行")
+                            }
+                        }) {
+                            Image(systemName: "doc.on.doc")
+                                .font(.system(size: 11))
+                                .foregroundColor(.cyan)
+                                .padding(4)
+                                .background(Color(white: 0.2))
+                                .cornerRadius(4)
+                        }
+                    }
+                } else {
+                    Text(line.isEmpty ? " " : line)
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundColor(defaultColor)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+    }
+
+    private func extractURL(from string: String) -> String? {
+        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        let matches = detector?.matches(in: string, options: [], range: NSRange(location: 0, length: string.utf16.count))
+        if let match = matches?.first, let range = Range(match.range, in: string) {
+            return String(string[range])
+        }
+        return nil
+    }
+
+    private func showToast(_ msg: String) {
+        withAnimation { copiedTip = msg }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+            withAnimation { copiedTip = nil }
         }
     }
 

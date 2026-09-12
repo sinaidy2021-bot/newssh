@@ -1,6 +1,7 @@
 import Foundation
 import Citadel
 import NIOCore
+import NIOSSH
 
 public struct CommandHistoryItem: Identifiable {
     public let id = UUID()
@@ -64,11 +65,14 @@ class SSHSession: ObservableObject {
                     self.history.append(CommandHistoryItem(command: "system", output: cleanedBanner))
                 }
                 
-                // 构造 PTY 请求参数，匹配最新版 Citadel 的要求
                 let pty = SSHChannelRequestEvent.PseudoTerminalRequest(
+                    wantReply: true,
                     term: "xterm-256color",
-                    width: 80,
-                    height: 24
+                    terminalCharacterWidth: 80,
+                    terminalRowHeight: 24,
+                    terminalPixelWidth: 0,
+                    terminalPixelHeight: 0,
+                    terminalModes: .init()
                 )
                 
                 try await client.withPTY(pty) { [weak self] stream, writer in

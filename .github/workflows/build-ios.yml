@@ -1,63 +1,253 @@
+name: Build iOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+
+      # =========================
+      # 1. Checkout
+      # =========================
+      - name: Checkout
+        uses: actions/checkout@v4
+
+
+      # =========================
+      # 2. Install XcodeGen
+      # =========================
+      - name: Install XcodeGen
+        run: |
+          brew update
+          brew install xcodegen
+
+
+      # =========================
+      # 3. Show environment
+      # =========================
+      - name: Show build environment
+        run: |
+          echo "=== macOS ==="
+          sw_vers
+
+          echo "=== Xcode ==="
+          xcodebuild -version
+
+          echo "=== Swift ==="
+          swift --version
+
+          echo "=== XcodeGen ==="
+          xcodegen --version
+
+
+      # =========================
+      # 4. Generate Xcode project
+      # =========================
+      - name: Generate Xcode project
+        run: |
+          set -e
+
+          xcodegen generate
+
+          echo "=== Generated files ==="
+          ls -la
+
+          if [ ! -d "MySSH.xcodeproj" ]; then
+            echo "ERROR: MySSH.xcodeproj was not generated."
+            exit 1
+          fi
+
+
+      # =========================
+      # 5. Resolve Swift packages
+      # =========================
+      - name: Resolve packages
+        run: |
+          set -e
+
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project MySSH.xcodeproj \
+            -scheme MySSH
+
+
+      # =========================
+      # 6. Build unsigned app
+      # =========================
+      - name: Build unsigned app
+        run: |
+          set -e
+
+          rm -rf build
+
+          xcodebuild \
+            -project MySSH.xcodeproj \
+            -scheme MySSH \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            COMPILER_INDEX_STORE_ENABLE=NO
+
+          echo "=== Build products ==="
+          find build/Build/Products -maxdepth 2 -type d -print
+
+
+      # =========================
+      # 7. Verify APP
+      # =========================
+      - name: Verify app
+        run: |
+          set -e
+
+          APP_PATH="build/Build/Products/Release-iphoneos/MySSH.app"
+
+          echo "=== Checking APP ==="
+
+          if [ ! -d "$APP_PATH" ]; then
+            echo "ERROR: MySSH.app does not exist."
+            exit 1
+          fi
+
+          echo "APP found:"
+          ls -lah "$APP_PATH"
+
+          echo "=== Checking executable ==="
+
+          if [ ! -f "$APP_PATH/MySSH" ]; then
+            echo "ERROR: MySSH executable not found."
+            exit 1
+          fi
+
+          chmod +x "$APP_PATH/MySSH"
+
+          echo "=== Checking Info.plist ==="
+
+          if [ ! -f "$APP_PATH/Info.plist" ]; then
+            echo "ERROR: Info.plist not found."
+            exit 1
+          fi
+
+          /usr/libexec/PlistBuddy \
+            -c "Print :CFBundleIdentifier" \
+            "$APP_PATH/Info.plist"
+
+          /usr/libexec/PlistBuddy \
+            -c "Print :CFBundleExecutable" \
+            "$APP_PATH/Info.plist"
+
+          echo "=== APP verification OK ==="
+
+
+      # =========================
+      # 8. Create standard IPA
+      # =========================
       - name: Create IPA
         run: |
           set -e
 
           rm -rf Payload
+          rm -rf ipa_check
           rm -f MySSH-unsigned.ipa
 
           APP_PATH="build/Build/Products/Release-iphoneos/MySSH.app"
 
-          echo "=== Checking APP ==="
-          ls -la "$APP_PATH"
-
-          if [ ! -d "$APP_PATH" ]; then
-            echo "ERROR: MySSH.app not found"
-            exit 1
-          fi
-
-          echo "=== Checking Info.plist ==="
-          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Info.plist"
-          /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Info.plist"
-
           echo "=== Creating Payload ==="
-          mkdir Payload
-          cp -R "$APP_PATH" Payload/
+
+          mkdir -p Payload
+
+          cp -R "$APP_PATH" "Payload/MySSH.app"
+
+          echo "=== Payload structure ==="
+
+          find Payload -maxdepth 2 -print
+
 
           echo "=== Creating IPA ==="
-          ditto -c -k --sequesterRsrc --keepParent Payload MySSH-unsigned.ipa
 
-          echo "=== File type ==="
-          file MySSH-unsigned.ipa
+          cd Payload
 
-          echo "=== IPA size ==="
+          zip -r -9 "../MySSH-unsigned.ipa" "MySSH.app"
+
+          cd ..
+
+
+          echo "=== IPA created ==="
+
           ls -lh MySSH-unsigned.ipa
 
-          echo "=== ZIP test ==="
+
+      # =========================
+      # 9. Verify IPA
+      # =========================
+      - name: Verify IPA
+        run: |
+          set -e
+
+          echo "=== File type ==="
+
+          file MySSH-unsigned.ipa
+
+
+          echo "=== ZIP integrity test ==="
+
           unzip -t MySSH-unsigned.ipa
 
-          echo "=== IPA structure ==="
-          unzip -l MySSH-unsigned.ipa | head -50
 
-          echo "=== Checking Payload ==="
-          unzip -l MySSH-unsigned.ipa | grep "Payload/MySSH.app"
+          echo "=== IPA contents ==="
+
+          unzip -l MySSH-unsigned.ipa
+
 
           echo "=== Extract test ==="
-          rm -rf ipa_test
-          mkdir ipa_test
-          unzip -q MySSH-unsigned.ipa -d ipa_test
 
-          if [ ! -d "ipa_test/Payload/MySSH.app" ]; then
-            echo "ERROR: Payload/MySSH.app missing"
+          mkdir -p ipa_check
+
+          unzip -q MySSH-unsigned.ipa -d ipa_check
+
+
+          echo "=== Checking Payload ==="
+
+          if [ ! -d "ipa_check/Payload/MySSH.app" ]; then
+            echo "ERROR: Payload/MySSH.app not found."
             exit 1
           fi
 
-          if [ ! -f "ipa_test/Payload/MySSH.app/Info.plist" ]; then
-            echo "ERROR: Info.plist missing"
+
+          echo "=== Checking Info.plist ==="
+
+          if [ ! -f "ipa_check/Payload/MySSH.app/Info.plist" ]; then
+            echo "ERROR: Info.plist not found."
             exit 1
           fi
 
-          echo "=== IPA verification successful ==="
 
+          echo "=== Checking executable ==="
+
+          if [ ! -f "ipa_check/Payload/MySSH.app/MySSH" ]; then
+            echo "ERROR: MySSH executable not found."
+            exit 1
+          fi
+
+
+          echo "=================================="
+          echo "IPA BUILD SUCCESSFUL"
+          echo "=================================="
+
+          ls -lh MySSH-unsigned.ipa
+
+
+      # =========================
+      # 10. Upload IPA
+      # =========================
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:

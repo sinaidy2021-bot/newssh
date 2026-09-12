@@ -7,10 +7,17 @@ targets:
     platform: iOS
     deploymentTarget: "16.0"
     sources:
-      - path: newssh
+      - path: .
     dependencies:
       - package: Citadel
+      - package: swift-nio
+        product: NIOCore
+      - package: swift-nio
+        product: NIOPosix
 packages:
   Citadel:
     url: https://github.com/orlandos-nl/Citadel.git
     branch: main
+  swift-nio:
+    url: https://github.com/apple/swift-nio.git
+    from: "2.65.0"

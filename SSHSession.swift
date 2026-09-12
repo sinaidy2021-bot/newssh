@@ -1,18 +1,27 @@
 import Foundation
 import UIKit
+import Combine
 import Citadel
 import NIOCore
 import NIOSSH
 
+// MARK: - Command History
+
 public struct CommandHistoryItem: Identifiable {
     public let id = UUID()
+
+    /// 命令本身
     public let command: String
+
+    /// 执行命令时的 Prompt
     public let prompt: String
+
+    /// 当前命令产生的全部输出
     public var output: String
 
     public init(
         command: String,
-        output: String,
+        output: String = "",
         prompt: String = ""
     ) {
         self.command = command
@@ -21,60 +30,80 @@ public struct CommandHistoryItem: Identifiable {
     }
 }
 
-class SSHSession: ObservableObject {
+// MARK: - SSH Session
 
-    @Published var isConnected: Bool = false
+@MainActor
+final class SSHSession: ObservableObject {
+
+    // MARK: Published
+
+    @Published var isConnected = false
+
     @Published var history: [CommandHistoryItem] = []
-    @Published var currentPrompt: String = ""
+
+    @Published var currentPrompt = ""
+
+    /// 当前是否有命令/程序正在运行
+    @Published private(set) var commandIsRunning = false
+
+    // MARK: SSH
 
     private var client: SSHClient?
+
     private var activeWriter: TTYStdinWriter?
 
-    var host: String = ""
-    var port: Int = 22
-    var username: String = "root"
-    var password: String = ""
+    var host = ""
+    var port = 22
+    var username = "root"
+    var password = ""
 
-    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    // MARK: Background
+
+    private var backgroundTask:
+        UIBackgroundTaskIdentifier = .invalid
+
     private var keepAliveTimer: Timer?
 
-    // MARK: - 串行命令队列
+    // MARK: Command Queue
 
-    // 已经建立历史块、等待执行/正在执行的命令 ID
+    /// 已经创建历史块的命令 ID
     private var pendingCommandIDs: [UUID] = []
 
-    // 与 pendingCommandIDs 一一对应
+    /// 与 pendingCommandIDs 一一对应
     private var pendingCommands: [String] = []
 
-    // 当前是否已经有一个命令正在等待 Prompt
-    private var commandIsRunning = false
+    // MARK: ANSI
 
-    // MARK: - ANSI
-
-    private func cleanANSI(_ raw: String) -> String {
+    private func cleanANSI(
+        _ raw: String
+    ) -> String {
 
         var text = raw
 
+        // CSI 私有模式
         text = text.replacingOccurrences(
-            of: #"\x1B\[\?[0-9]+[hl]"#,
+            of: #"\x1B\[\?[0-9;]*[hl]"#,
             with: "",
             options: .regularExpression
         )
 
+        // OSC
         text = text.replacingOccurrences(
             of: #"\x1B\][^\x07\x1B]*(\x07|\x1B\\)?"#,
             with: "",
             options: .regularExpression
         )
 
+        // 常见 ANSI
         text = text.replacingOccurrences(
-            of: #"\x1B\[[0-9;]*[mKHz]"#,
+            of: #"\x1B\[[0-9;?]*[ -/]*[@-~]"#,
             with: "",
             options: .regularExpression
         )
 
+        // 其他 ESC
         text = text.replacingOccurrences(
-            of: #"\x1B[@-Z\\-_]|[\u001B\u009B][#()#?]*([\x20-\x7E]*)([@-~])"#,
+            of: #"\x1B[@-Z\\-_]"#,
             with: "",
             options: .regularExpression
         )
@@ -89,11 +118,13 @@ class SSHSession: ObservableObject {
             with: ""
         )
 
+        // CRLF
         text = text.replacingOccurrences(
             of: "\r\n",
             with: "\n"
         )
 
+        // 单独 CR
         text = text.replacingOccurrences(
             of: "\r",
             with: ""
@@ -102,55 +133,86 @@ class SSHSession: ObservableObject {
         return text
     }
 
-    // MARK: - Prompt
+    // MARK: Prompt
 
     private func fallbackPrompt() -> String {
-        let symbol = username == "root" ? "#" : "$"
+
+        let symbol =
+            username == "root"
+            ? "#"
+            : "$"
+
         return "\(username)@\(host):~\(symbol)"
     }
 
-    private func extractTrailingPrompt(
-        from text: String
-    ) -> (prompt: String, output: String)? {
+    private func isShellPrompt(
+        _ line: String
+    ) -> Bool {
 
-        let lines = text.components(
-            separatedBy: "\n"
-        )
-
-        guard let lastNonEmptyIndex = lines.lastIndex(
-            where: {
-                !$0.trimmingCharacters(
-                    in: .whitespacesAndNewlines
-                ).isEmpty
-            }
-        ) else {
-            return nil
-        }
-
-        let possiblePrompt = lines[lastNonEmptyIndex]
-            .trimmingCharacters(
+        let value =
+            line.trimmingCharacters(
                 in: .whitespacesAndNewlines
             )
+
+        guard !value.isEmpty else {
+            return false
+        }
 
         let pattern =
             #"^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:[^\r\n]*[#$]$"#
 
-        guard possiblePrompt.range(
+        return value.range(
             of: pattern,
             options: .regularExpression
-        ) != nil else {
+        ) != nil
+    }
+
+    private func extractTrailingPrompt(
+        from text: String
+    ) -> (
+        prompt: String,
+        output: String
+    )? {
+
+        let lines =
+            text.components(
+                separatedBy: "\n"
+            )
+
+        guard let index =
+                lines.lastIndex(
+                    where: {
+                        !$0.trimmingCharacters(
+                            in: .whitespacesAndNewlines
+                        ).isEmpty
+                    }
+                )
+        else {
+            return nil
+        }
+
+        let possiblePrompt =
+            lines[index]
+                .trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+
+        guard isShellPrompt(
+            possiblePrompt
+        ) else {
             return nil
         }
 
         var outputLines = lines
 
         outputLines.remove(
-            at: lastNonEmptyIndex
+            at: index
         )
 
-        var output = outputLines.joined(
-            separator: "\n"
-        )
+        var output =
+            outputLines.joined(
+                separator: "\n"
+            )
 
         while output.hasSuffix("\n") {
             output.removeLast()
@@ -162,7 +224,7 @@ class SSHSession: ObservableObject {
         )
     }
 
-    // MARK: - Connect
+    // MARK: Connect
 
     func connect() {
 
@@ -174,95 +236,113 @@ class SSHSession: ObservableObject {
 
             do {
 
-                let client = try await SSHClient.connect(
-                    host: self.host,
-                    port: .init(
-                        integerLiteral: self.port
-                    ),
-                    authenticationMethod: .passwordBased(
-                        username: self.username,
-                        password: self.password
-                    ),
-                    hostKeyValidator: .acceptAnything(),
-                    reconnect: .never
+                let client =
+                    try await SSHClient.connect(
+                        host: self.host,
+                        port: .init(
+                            integerLiteral: self.port
+                        ),
+                        authenticationMethod:
+                            .passwordBased(
+                                username: self.username,
+                                password: self.password
+                            ),
+                        hostKeyValidator:
+                            .acceptAnything(),
+                        reconnect: .never
+                    )
+
+                self.client = client
+
+                self.isConnected = true
+
+                self.currentPrompt =
+                    self.fallbackPrompt()
+
+                self.pendingCommandIDs.removeAll()
+                self.pendingCommands.removeAll()
+                self.commandIsRunning = false
+
+                self.history.removeAll()
+
+                self.history.append(
+                    CommandHistoryItem(
+                        command: "system",
+                        output:
+                            "连接成功：\(self.host)"
+                    )
                 )
 
-                await MainActor.run {
-
-                    self.client = client
-                    self.isConnected = true
-                    self.currentPrompt =
-                        self.fallbackPrompt()
-
-                    self.pendingCommandIDs.removeAll()
-                    self.pendingCommands.removeAll()
-                    self.commandIsRunning = false
-
-                    if self.history.isEmpty {
-
-                        self.history.append(
-                            CommandHistoryItem(
-                                command: "system",
-                                output:
-                                    "连接成功：\(self.host)"
-                            )
-                        )
-                    }
-
-                    self.startKeepAlive()
-                }
+                self.startKeepAlive()
 
                 let ptyReq =
                     SSHChannelRequestEvent
-                    .PseudoTerminalRequest(
-                        wantReply: true,
-                        term: "xterm-256color",
-                        terminalCharacterWidth: 100,
-                        terminalRowHeight: 40,
-                        terminalPixelWidth: 0,
-                        terminalPixelHeight: 0,
-                        terminalModes: .init(
-                            [.ECHO: 0]
+                        .PseudoTerminalRequest(
+                            wantReply: true,
+                            term: "xterm-256color",
+                            terminalCharacterWidth: 120,
+                            terminalRowHeight: 40,
+                            terminalPixelWidth: 0,
+                            terminalPixelHeight: 0,
+                            terminalModes:
+                                .init(
+                                    [
+                                        // 打开 ECHO。
+                                        //
+                                        // 这样：
+                                        //
+                                        // apt -> y
+                                        // passwd -> 输入
+                                        // top -> q
+                                        //
+                                        // 等交互输入可以正常显示。
+                                        //
+                                        // 密码程序通常会自行关闭 ECHO。
+                                        .ECHO: 1
+                                    ]
+                                )
                         )
-                    )
 
                 try await client.withPTY(
                     ptyReq
                 ) { [weak self] stream, writer in
 
+                    guard let self else {
+                        return
+                    }
+
                     await MainActor.run {
 
-                        guard let self = self else {
-                            return
-                        }
+                        self.activeWriter =
+                            writer
 
-                        self.activeWriter = writer
-
-                        // 如果连接建立之前已经排队了命令，
-                        // Writer 出现后立即开始第一个。
                         self.startNextQueuedCommand()
                     }
 
-                    for try await event in stream {
+                    do {
 
-                        let buffer: ByteBuffer
+                        for try await event in stream {
 
-                        switch event {
+                            let buffer: ByteBuffer
 
-                        case .stdout(let b):
-                            buffer = b
+                            switch event {
 
-                        case .stderr(let b):
-                            buffer = b
-                        }
+                            case .stdout(let value):
+                                buffer = value
 
-                        if let text = buffer.getString(
-                            at: buffer.readerIndex,
-                            length: buffer.readableBytes
-                        ) {
+                            case .stderr(let value):
+                                buffer = value
+                            }
 
-                            guard let self = self else {
-                                return
+                            guard let text =
+                                    buffer.getString(
+                                        at:
+                                            buffer.readerIndex,
+                                        length:
+                                            buffer.readableBytes
+                                    )
+                            else {
+                                continue
                             }
 
                             let cleaned =
@@ -274,65 +354,62 @@ class SSHSession: ObservableObject {
 
                             await MainActor.run {
 
-                                self.appendOutput(
+                                self.receiveOutput(
                                     cleaned
                                 )
                             }
+                        }
+
+                    } catch {
+
+                        await MainActor.run {
+
+                            self.handleDisconnect(
+                                reason:
+                                    error.localizedDescription
+                            )
                         }
                     }
                 }
 
             } catch {
 
-                await MainActor.run {
-
-                    self.history.append(
-                        CommandHistoryItem(
-                            command: "system",
-                            output:
-                                "连接断开或异常: \(error.localizedDescription)"
-                        )
-                    )
-
-                    self.isConnected = false
-                    self.activeWriter = nil
-
-                    self.stopKeepAlive()
-
-                    self.pendingCommandIDs.removeAll()
-                    self.pendingCommands.removeAll()
-
-                    self.commandIsRunning = false
-                }
+                self.handleDisconnect(
+                    reason:
+                        error.localizedDescription
+                )
             }
         }
     }
 
-    // MARK: - Receive Output
+    // MARK: Receive Output
 
-    private func appendOutput(
+    private func receiveOutput(
         _ text: String
     ) {
 
-        var incomingText = text
+        guard !text.isEmpty else {
+            return
+        }
+
+        var incoming = text
 
         // ------------------------------------------------
-        // 先检查是不是 Shell Prompt。
+        // 如果收到 Shell Prompt：
         //
-        // 收到 Prompt = 当前命令已经真正结束。
-        // 只有到了这里，才允许发送下一个命令。
+        // 说明当前命令结束。
         // ------------------------------------------------
 
-        if let promptResult =
+        if let result =
             extractTrailingPrompt(
-                from: incomingText
+                from: incoming
             ) {
 
             currentPrompt =
-                promptResult.prompt
+                result.prompt
 
-            incomingText =
-                promptResult.output
+            incoming =
+                result.output
 
             if !pendingCommandIDs.isEmpty {
 
@@ -350,128 +427,81 @@ class SSHSession: ObservableObject {
                         }
                     ) {
 
-                    if !incomingText.isEmpty {
+                    if !incoming.isEmpty {
 
                         history[index].output +=
-                            incomingText
+                            incoming
                     }
                 }
 
-                // 当前命令彻底结束。
                 commandIsRunning = false
 
-                // 现在才开始下一个。
+                // 当前命令完成。
+                //
+                // 现在才允许下一条。
                 startNextQueuedCommand()
 
                 return
             }
         }
 
-        guard !incomingText.isEmpty else {
+        guard !incoming.isEmpty else {
             return
         }
 
         // ------------------------------------------------
-        // 有命令正在执行：
-        // 所有输出只允许进入队列第一个命令。
+        // 当前有命令正在运行。
+        //
+        // 所有输出都进入当前命令块。
         // ------------------------------------------------
 
-        if let firstPendingID =
+        if let activeID =
             pendingCommandIDs.first,
            let index =
             history.firstIndex(
                 where: {
-                    $0.id == firstPendingID
+                    $0.id == activeID
                 }
             ) {
 
             history[index].output +=
-                incomingText
+                incoming
 
             return
         }
 
         // ------------------------------------------------
-        // 没有命令等待：
-        // 欢迎信息 / 系统信息。
+        // 没有命令运行：
+        //
+        // SSH 登录欢迎信息。
         // ------------------------------------------------
 
-        if let lastIndex =
+        if let last =
             history.indices.last,
-           history[lastIndex].command == "system" {
+           history[last].command == "system" {
 
-            var cleanedText =
-                incomingText
-
-            if cleanedText.contains(
-                "System information as of"
-            ) {
-
-                if let range =
-                    cleanedText.range(
-                        of: "root@"
-                    ) {
-
-                    cleanedText =
-                        String(
-                            cleanedText[
-                                range.lowerBound...
-                            ]
-                        )
-
-                } else if let range2 =
-                    cleanedText.range(
-                        of: "Last login:"
-                    ) {
-
-                    cleanedText =
-                        String(
-                            cleanedText[
-                                range2.lowerBound...
-                            ]
-                        )
-                }
-            }
-
-            history[lastIndex].output +=
-                cleanedText
+            history[last].output +=
+                incoming
 
         } else {
 
             history.append(
                 CommandHistoryItem(
                     command: "system",
-                    output: incomingText
+                    output: incoming
                 )
             )
         }
     }
 
-    // MARK: - 拆分组合命令
+    // MARK: Split Commands
 
     private func splitCommands(
         _ command: String
     ) -> [String] {
 
-        /*
-         支持：
-
-         uname -a
-         df -h
-
-         以及：
-
-         uname -a; df -h; free -h
-
-         注意：
-         ; 只在引号之外作为分隔符。
-
-         && / || 不拆。
-         因为强行拆成多个独立 SSH 命令会改变 Shell
-         原本的条件执行逻辑。
-        */
-
         var result: [String] = []
+
         var current = ""
 
         var singleQuote = false
@@ -483,77 +513,108 @@ class SSHSession: ObservableObject {
             if escaped {
 
                 current.append(character)
+
                 escaped = false
+
                 continue
             }
 
-            if character == "\\" && !singleQuote {
+            if character == "\\"
+                && !singleQuote {
 
                 current.append(character)
+
                 escaped = true
+
                 continue
             }
 
-            if character == "'" && !doubleQuote {
+            if character == "'"
+                && !doubleQuote {
 
                 singleQuote.toggle()
+
                 current.append(character)
+
                 continue
             }
 
-            if character == "\"" && !singleQuote {
+            if character == "\""
+                && !singleQuote {
 
                 doubleQuote.toggle()
+
                 current.append(character)
+
                 continue
             }
 
-            if character == ";" && !singleQuote && !doubleQuote {
+            if character == ";"
+                && !singleQuote
+                && !doubleQuote {
 
                 let value =
                     current.trimmingCharacters(
-                        in: .whitespacesAndNewlines
+                        in:
+                            .whitespacesAndNewlines
                     )
 
                 if !value.isEmpty {
-                    result.append(value)
+
+                    result.append(
+                        value
+                    )
                 }
 
                 current = ""
+
                 continue
             }
 
-            if character == "\n" && !singleQuote && !doubleQuote {
+            if character == "\n"
+                && !singleQuote
+                && !doubleQuote {
 
                 let value =
                     current.trimmingCharacters(
-                        in: .whitespacesAndNewlines
+                        in:
+                            .whitespacesAndNewlines
                     )
 
                 if !value.isEmpty {
-                    result.append(value)
+
+                    result.append(
+                        value
+                    )
                 }
 
                 current = ""
+
                 continue
             }
 
-            current.append(character)
+            current.append(
+                character
+            )
         }
 
         let finalValue =
             current.trimmingCharacters(
-                in: .whitespacesAndNewlines
+                in:
+                    .whitespacesAndNewlines
             )
 
         if !finalValue.isEmpty {
-            result.append(finalValue)
+
+            result.append(
+                finalValue
+            )
         }
 
         return result
     }
 
-    // MARK: - Send Command
+    // MARK: Send Command
 
     func sendCommand(
         _ command: String
@@ -570,27 +631,11 @@ class SSHSession: ObservableObject {
             return
         }
 
-        // ------------------------------------------------
-        // 先建立所有历史块。
-        //
-        // 例如：
-        //
-        // uname -a; df -h; free -h
-        //
-        // 会立即建立：
-        //
-        // [uname -a]
-        // [df -h]
-        // [free -h]
-        //
-        // 但只发送第一个。
-        // ------------------------------------------------
-
-        for cmd in commands {
+        for command in commands {
 
             let item =
                 CommandHistoryItem(
-                    command: cmd,
+                    command: command,
                     output: "",
                     prompt:
                         currentPrompt.isEmpty
@@ -598,23 +643,23 @@ class SSHSession: ObservableObject {
                         : currentPrompt
                 )
 
-            history.append(item)
+            history.append(
+                item
+            )
 
             pendingCommandIDs.append(
                 item.id
             )
 
             pendingCommands.append(
-                cmd
+                command
             )
         }
 
-        // 只有这里启动。
-        // 后面的命令由收到 Prompt 后自动启动。
         startNextQueuedCommand()
     }
 
-    // MARK: - 开始队列中的下一个命令
+    // MARK: Start Next Command
 
     private func startNextQueuedCommand() {
 
@@ -623,7 +668,8 @@ class SSHSession: ObservableObject {
         }
 
         guard !pendingCommandIDs.isEmpty,
-              !pendingCommands.isEmpty else {
+              !pendingCommands.isEmpty
+        else {
             return
         }
 
@@ -631,9 +677,9 @@ class SSHSession: ObservableObject {
             return
         }
 
-        guard let writer = activeWriter else {
-            // Writer 还没准备好。
-            // 等 withPTY 设置 activeWriter 后再次调用。
+        guard let writer =
+                activeWriter
+        else {
             return
         }
 
@@ -675,31 +721,47 @@ class SSHSession: ObservableObject {
                                 }
                             )
                     else {
-                        self.commandIsRunning = false
+
+                        self.commandIsRunning =
+                            false
+
                         return
                     }
 
                     self.history[index].output =
-                        "写入失败: \(error.localizedDescription)"
+                        "写入失败：\(error.localizedDescription)"
 
                     self.pendingCommandIDs.removeFirst()
 
                     if !self.pendingCommands.isEmpty {
+
                         self.pendingCommands.removeFirst()
                     }
 
-                    self.commandIsRunning = false
+                    self.commandIsRunning =
+                        false
 
-                    // 当前失败后继续处理后面的队列。
                     self.startNextQueuedCommand()
                 }
             }
         }
     }
 
-    // MARK: - Raw SSH Key
+    // MARK: Interactive Input
 
-    func sendRaw(
+    /// 给当前正在运行的程序发送输入。
+    ///
+    /// 例如：
+    ///
+    /// apt -> y
+    /// apt -> n
+    /// menu -> 1
+    /// menu -> 2
+    /// passwd -> password
+    /// top -> q
+    ///
+    /// 这些都不能进入命令队列。
+    func sendInteractiveInput(
         _ value: String
     ) {
 
@@ -707,14 +769,15 @@ class SSHSession: ObservableObject {
             return
         }
 
+        guard let writer =
+                activeWriter
+        else {
+            return
+        }
+
         Task {
 
             do {
-
-                guard let writer =
-                    self.activeWriter else {
-                    return
-                }
 
                 var buffer =
                     ByteBufferAllocator()
@@ -723,19 +786,52 @@ class SSHSession: ObservableObject {
                                 value.utf8.count
                         )
 
-                buffer.writeString(value)
+                buffer.writeString(
+                    value
+                )
 
                 try await writer.write(
                     buffer
                 )
 
             } catch {
-                // 控制键失败时不创建历史记录
+
+                await MainActor.run {
+
+                    self.appendSystemMessage(
+                        "交互输入失败：\(error.localizedDescription)"
+                    )
+                }
             }
         }
     }
 
-    // MARK: - Keep Alive
+    // MARK: Raw Input
+
+    func sendRaw(
+        _ value: String
+    ) {
+
+        sendInteractiveInput(
+            value
+        )
+    }
+
+    // MARK: System Message
+
+    private func appendSystemMessage(
+        _ text: String
+    ) {
+
+        history.append(
+            CommandHistoryItem(
+                command: "system",
+                output: text
+            )
+        )
+    }
+
+    // MARK: Keep Alive
 
     private func startKeepAlive() {
 
@@ -745,14 +841,15 @@ class SSHSession: ObservableObject {
 
             self.keepAliveTimer =
                 Timer.scheduledTimer(
-                    withTimeInterval: 25.0,
+                    withTimeInterval: 25,
                     repeats: true
                 ) { [weak self] _ in
 
-                    guard let self = self,
+                    guard let self,
                           self.isConnected,
                           let writer =
-                            self.activeWriter else {
+                            self.activeWriter
+                    else {
                         return
                     }
 
@@ -764,6 +861,9 @@ class SSHSession: ObservableObject {
                                     capacity: 1
                                 )
 
+                        // SSH 层保持连接。
+                        //
+                        // 不发送换行。
                         buffer.writeString("")
 
                         try? await writer.write(
@@ -777,10 +877,11 @@ class SSHSession: ObservableObject {
     private func stopKeepAlive() {
 
         keepAliveTimer?.invalidate()
+
         keepAliveTimer = nil
     }
 
-    // MARK: - Background
+    // MARK: Background
 
     func appDidEnterBackground() {
 
@@ -789,15 +890,17 @@ class SSHSession: ObservableObject {
         }
 
         backgroundTask =
-            UIApplication.shared.beginBackgroundTask(
-                withName: "SSHKeepAlive"
-            ) { [weak self] in
+            UIApplication.shared
+                .beginBackgroundTask(
+                    withName: "SSHKeepAlive"
+                ) { [weak self] in
 
-                self?.endBackgroundTask()
-            }
+                    self?.endBackgroundTask()
+                }
     }
 
     func appWillEnterForeground() {
+
         endBackgroundTask()
     }
 
@@ -805,44 +908,75 @@ class SSHSession: ObservableObject {
 
         if backgroundTask != .invalid {
 
-            UIApplication.shared.endBackgroundTask(
-                backgroundTask
-            )
+            UIApplication.shared
+                .endBackgroundTask(
+                    backgroundTask
+                )
 
             backgroundTask =
                 .invalid
         }
     }
 
-    // MARK: - Disconnect
+    // MARK: Disconnect
 
     func disconnect() {
 
         stopKeepAlive()
+
         endBackgroundTask()
 
         Task {
 
-            try? await self.client?.close()
+            try? await client?.close()
 
             await MainActor.run {
 
                 self.client = nil
+
                 self.activeWriter = nil
+
                 self.isConnected = false
 
                 self.pendingCommandIDs.removeAll()
+
                 self.pendingCommands.removeAll()
 
                 self.commandIsRunning = false
 
-                self.history.append(
-                    CommandHistoryItem(
-                        command: "system",
-                        output: "已主动断开连接"
-                    )
+                self.appendSystemMessage(
+                    "已主动断开连接"
                 )
             }
         }
+    }
+
+    // MARK: Disconnect Handler
+
+    private func handleDisconnect(
+        reason: String
+    ) {
+
+        self.history.append(
+            CommandHistoryItem(
+                command: "system",
+                output:
+                    "连接断开：\(reason)"
+            )
+        )
+
+        self.client = nil
+
+        self.activeWriter = nil
+
+        self.isConnected = false
+
+        self.pendingCommandIDs.removeAll()
+
+        self.pendingCommands.removeAll()
+
+        self.commandIsRunning = false
+
+        self.stopKeepAlive()
     }
 }

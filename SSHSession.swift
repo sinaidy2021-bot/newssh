@@ -18,7 +18,7 @@ class SSHSession: ObservableObject {
     @Published var history: [CommandHistoryItem] = []
     
     private var client: SSHClient?
-    private var ttyWriter: TTYStdinWriter?
+    private var activeWriter: TTYStdinWriter?
     
     var host: String = ""
     var port: Int = 22
@@ -54,7 +54,6 @@ class SSHSession: ObservableObject {
                     reconnect: .never
                 )
                 
-                // 1. 抓取内核欢迎信息
                 let bannerOutput = try await client.executeCommand("uname -a")
                 let bannerResult = String(buffer: bannerOutput)
                 let cleanedBanner = self.cleanANSI(bannerResult).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -65,22 +64,28 @@ class SSHSession: ObservableObject {
                     self.history.append(CommandHistoryItem(command: "system", output: cleanedBanner))
                 }
                 
-                // 2. 开启 PTY 交互会话
-                try await client.withPTY { [weak self] events, writer in
+                // 构造 PTY 请求参数，匹配最新版 Citadel 的要求
+                let pty = SSHChannelRequestEvent.PseudoTerminalRequest(
+                    term: "xterm-256color",
+                    width: 80,
+                    height: 24
+                )
+                
+                try await client.withPTY(pty) { [weak self] stream, writer in
                     await MainActor.run {
-                        self?.ttyWriter = writer
+                        self?.activeWriter = writer
                     }
                     
-                    for try await event in events {
+                    for try await event in stream {
                         let buffer: ByteBuffer
                         switch event {
                         case .stdout(let b): buffer = b
                         case .stderr(let b): buffer = b
                         }
                         
-                        if let str = buffer.getString(at: buffer.readerIndex, length: buffer.readableBytes) {
+                        if let text = buffer.getString(at: buffer.readerIndex, length: buffer.readableBytes) {
                             guard let self = self else { return }
-                            let cleaned = self.cleanANSI(str)
+                            let cleaned = self.cleanANSI(text)
                             guard !cleaned.isEmpty else { continue }
                             
                             await MainActor.run {
@@ -93,53 +98,46 @@ class SSHSession: ObservableObject {
                         }
                     }
                 }
-                
             } catch {
                 await MainActor.run {
-                    self.history.append(CommandHistoryItem(command: "system", output: "连接或通道关闭: \(error.localizedDescription)"))
+                    self.history.append(CommandHistoryItem(command: "system", output: "连接断开或异常: \(error.localizedDescription)"))
                     self.isConnected = false
-                    self.ttyWriter = nil
+                    self.activeWriter = nil
                 }
             }
         }
     }
 
     func sendCommand(_ command: String) {
-        guard isConnected else {
-            self.history.append(CommandHistoryItem(command: command, output: "错误: 未连接到服务器"))
-            return
-        }
+        guard isConnected else { return }
 
         let cmdToSend = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cmdToSend.isEmpty else { return }
 
-        // 追加一条新的命令展示卡片
         DispatchQueue.main.async {
             self.history.append(CommandHistoryItem(command: cmdToSend, output: ""))
         }
 
         Task {
             do {
-                if let writer = self.ttyWriter {
-                    // 通过交互通道把命令发给远端（带换行符模拟回车）
+                if let writer = self.activeWriter {
                     var buffer = ByteBufferAllocator().buffer(capacity: cmdToSend.utf8.count + 1)
                     buffer.writeString(cmdToSend + "\n")
                     try await writer.write(buffer)
                 } else if let client = self.client {
-                    // 后备单次执行
                     let output = try await client.executeCommand("export TERM=xterm-256color; " + cmdToSend)
                     let result = String(buffer: output)
                     let cleaned = self.cleanANSI(result)
                     await MainActor.run {
                         if let lastIndex = self.history.indices.last {
-                            self.history[lastIndex].output = cleaned.isEmpty ? "(已执行，无输出)" : cleaned
+                            self.history[lastIndex].output = cleaned.isEmpty ? "(已执行，无回显)" : cleaned
                         }
                     }
                 }
             } catch {
                 await MainActor.run {
                     if let lastIndex = self.history.indices.last {
-                        self.history[lastIndex].output = "发送出错: \(error.localizedDescription)"
+                        self.history[lastIndex].output = "写入失败: \(error.localizedDescription)"
                     }
                 }
             }
@@ -151,7 +149,7 @@ class SSHSession: ObservableObject {
             try? await self.client?.close()
             await MainActor.run {
                 self.client = nil
-                self.ttyWriter = nil
+                self.activeWriter = nil
                 self.isConnected = false
                 self.history.append(CommandHistoryItem(command: "system", output: "已断开连接"))
             }

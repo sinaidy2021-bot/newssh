@@ -1,5 +1,5 @@
 import Foundation
-import Citadel
+@preconcurrency import Citadel
 
 @MainActor
 final class SSHSession: ObservableObject {
@@ -40,11 +40,11 @@ final class SSHSession: ObservableObject {
                     switch event {
                     case .stdout(let buffer), .stderr(let buffer):
                         let text = String(buffer: buffer)
-                        await self.appendOutput(text, at: index)
+                        self.appendOutput(text, at: index)
                     }
                 }
             } catch {
-                await self.appendOutput("执行失败：\(error.localizedDescription)\n", at: index)
+                self.appendOutput("执行失败：\(error.localizedDescription)\n", at: index)
             }
         }
     }

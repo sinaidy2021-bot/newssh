@@ -2,9 +2,6 @@ name: Build iOS IPA
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 jobs:
   build:
@@ -13,6 +10,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: 调试-显示仓库目录结构
+        shell: bash
+        run: |
+          {
+            echo "=== pwd ==="
+            pwd
+            echo "=== GITHUB_WORKSPACE 根目录 (深度2) ==="
+            find "$GITHUB_WORKSPACE" -maxdepth 2 -print
+            echo "=== 是否存在 project.yml ==="
+            find "$GITHUB_WORKSPACE" -maxdepth 3 -name "project.yml" -print
+          } | tee repo-structure.log
 
       - name: Show Xcode version
         run: |
@@ -25,9 +34,23 @@ jobs:
           brew install xcodegen
 
       - name: Generate Xcode project
+        shell: bash
         run: |
-          xcodegen generate --spec project.yml
-          test -f MySSH.xcodeproj/project.pbxproj
+          set -uo pipefail
+          {
+            if [ ! -f "project.yml" ]; then
+              echo "❌ 在仓库根目录 $(pwd) 下找不到 project.yml"
+              echo "=== 当前目录内容 ==="
+              ls -la
+              echo "=== 全仓库范围内搜索 project.yml ==="
+              find "$GITHUB_WORKSPACE" -name "project.yml" -print
+              exit 1
+            fi
+
+            xcodegen generate --spec project.yml
+            test -f MySSH.xcodeproj/project.pbxproj
+          } 2>&1 | tee xcodegen.log
+          test "${PIPESTATUS[0]}" -eq 0
 
       - name: Resolve Swift packages
         run: |
@@ -95,5 +118,23 @@ jobs:
         with:
           name: MySSH-build-log
           path: build/xcodebuild.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: 汇总所有诊断日志（无论成功失败都会上传）
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p diagnostics
+          cp repo-structure.log diagnostics/ 2>/dev/null || true
+          cp xcodegen.log diagnostics/ 2>/dev/null || true
+          cp build/xcodebuild.log diagnostics/ 2>/dev/null || true
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MySSH-diagnostics
+          path: diagnostics
           if-no-files-found: ignore
           retention-days: 7

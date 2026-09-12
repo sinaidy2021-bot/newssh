@@ -333,12 +333,24 @@ struct TerminalView: View {
         showToast(tip)
     }
 
+    // 智能识别：无论是网址、密码、账号、端口还是带有冒号配置的行，均自动配备专属复制按钮
     @ViewBuilder
     private func renderOutputLines(_ fullText: String, defaultColor: Color) -> some View {
         let lines = fullText.components(separatedBy: "\n")
         VStack(alignment: .leading, spacing: 2) {
             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                if line.contains("http://") || line.contains("https://") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                let shouldShowCopyButton = trimmed.contains("http://") || 
+                                           trimmed.contains("https://") || 
+                                           trimmed.contains("port:") || 
+                                           trimmed.contains("username") || 
+                                           trimmed.contains("password") || 
+                                           trimmed.contains("path:") || 
+                                           trimmed.contains("URL:") || 
+                                           trimmed.contains("IP:") || 
+                                           (trimmed.contains(":") && !trimmed.hasSuffix(":") && trimmed.count < 60)
+
+                if shouldShowCopyButton {
                     HStack(alignment: .center, spacing: 6) {
                         Text(line)
                             .font(.system(size: 13, design: .monospaced))
@@ -346,12 +358,14 @@ struct TerminalView: View {
                             .textSelection(.enabled)
                         
                         Button(action: {
+                            // 如果行内包含 URL，优先截取复制 URL；否则复制整行核心内容
                             if let url = extractURL(from: line) {
                                 UIPasteboard.general.string = url
                                 showToast("已复制地址: \(url)")
                             } else {
-                                UIPasteboard.general.string = line
-                                showToast("已复制该行")
+                                let cleanLine = line.trimmingCharacters(in: .whitespaces)
+                                UIPasteboard.general.string = cleanLine
+                                showToast("已复制: \(cleanLine)")
                             }
                         }) {
                             Image(systemName: "doc.on.doc")

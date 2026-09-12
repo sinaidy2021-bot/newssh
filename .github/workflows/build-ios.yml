@@ -29,6 +29,8 @@ jobs:
 
       - name: Build unsigned app
         run: |
+          set -e
+
           rm -rf build
 
           xcodebuild \
@@ -45,21 +47,48 @@ jobs:
 
       - name: Create IPA
         run: |
+          set -e
+
           rm -rf Payload
           rm -f MySSH-unsigned.ipa
 
+          APP_PATH="build/Build/Products/Release-iphoneos/MySSH.app"
+
+          if [ ! -d "$APP_PATH" ]; then
+            echo "ERROR: MySSH.app not found!"
+            exit 1
+          fi
+
           mkdir -p Payload
 
-          cp -R \
-            build/Build/Products/Release-iphoneos/MySSH.app \
-            Payload/MySSH.app
+          cp -R "$APP_PATH" Payload/MySSH.app
 
           chmod +x Payload/MySSH.app/MySSH
 
-          ditto -c -k --sequesterRsrc --keepParent Payload MySSH-unsigned.ipa
+          cd Payload
+          zip -r -9 ../MySSH-unsigned.ipa MySSH.app
+          cd ..
+
+          if [ ! -f "MySSH-unsigned.ipa" ]; then
+            echo "ERROR: IPA was not created!"
+            exit 1
+          fi
+
+          echo "=== IPA file ==="
+          ls -lh MySSH-unsigned.ipa
+
+          echo "=== IPA contents ==="
+          unzip -l MySSH-unsigned.ipa
+
+          echo "=== Testing IPA ==="
+          unzip -t MySSH-unsigned.ipa
+
+          echo "=== IPA created successfully ==="
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: MySSH-unsigned-ipa
           path: MySSH-unsigned.ipa
+          if-no-files-found: error
+          compression-level: 0

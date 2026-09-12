@@ -1,0 +1,99 @@
+name: Build iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: |
+          xcodebuild -version
+          xcode-select -p
+
+      - name: Install XcodeGen
+        run: |
+          brew update
+          brew install xcodegen
+
+      - name: Generate Xcode project
+        run: |
+          xcodegen generate --spec project.yml
+          test -f MySSH.xcodeproj/project.pbxproj
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild             -project MySSH.xcodeproj             -scheme MySSH             -sdk iphoneos             -destination 'generic/platform=iOS'             -resolvePackageDependencies
+
+      - name: Build unsigned iOS app
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf build
+          mkdir -p build
+
+          xcodebuild             -project MySSH.xcodeproj             -scheme MySSH             -configuration Release             -sdk iphoneos             -destination 'generic/platform=iOS'             -derivedDataPath build/DerivedData             CODE_SIGNING_ALLOWED=NO             CODE_SIGNING_REQUIRED=NO             CODE_SIGN_IDENTITY=""             build 2>&1 | tee build/xcodebuild.log
+
+          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/MySSH.app"
+
+          if [ ! -d "$APP_PATH" ]; then
+            echo "找不到 MySSH.app，构建失败。"
+            echo "=== build 目录 ==="
+            find build -maxdepth 6 -print
+            exit 1
+          fi
+
+          if [ ! -f "$APP_PATH/MySSH" ]; then
+            echo "MySSH.app 内没有可执行文件 MySSH。"
+            find "$APP_PATH" -maxdepth 2 -print
+            exit 1
+          fi
+
+          echo "APP_PATH=$APP_PATH"
+          file "$APP_PATH/MySSH"
+
+      - name: Package IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf ipa Payload
+          mkdir -p ipa/Payload
+
+          cp -R "build/DerivedData/Build/Products/Release-iphoneos/MySSH.app" ipa/Payload/
+
+          # IPA 本质上是 ZIP，但根目录必须是 Payload/MySSH.app
+          cd ipa
+          /usr/bin/zip -qry ../MySSH.ipa Payload
+
+          cd ..
+          echo "=== IPA 内容检查 ==="
+          /usr/bin/unzip -l MySSH.ipa | head -40
+
+          test -s MySSH.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: MySSH-IPA
+          path: MySSH.ipa
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MySSH-build-log
+          path: build/xcodebuild.log
+          if-no-files-found: ignore
+          retention-days: 7

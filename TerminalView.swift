@@ -54,11 +54,14 @@ struct TerminalView: View {
                                     Text(item.output)
                                         .font(.system(size: 13, design: .monospaced))
                                         .foregroundColor(.yellow)
+                                        .textSelection(.enabled)
                                 } else {
-                                    Text("root@\(serverName):~# \(item.command)")
+                                    // 完美的专属提示符格式
+                                    Text("root@\(serverName)~# \(item.command)")
                                         .font(.system(size: 13, weight: .bold, design: .monospaced))
                                         .foregroundColor(.cyan)
                                     
+                                    // 支持独立长按选择复制
                                     Text(item.output)
                                         .font(.system(size: 13, design: .monospaced))
                                         .foregroundColor(.green)

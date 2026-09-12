@@ -49,7 +49,7 @@ struct ServerListView: View {
                     ForEach(servers) { server in
 
                         NavigationLink {
-                            TerminalView()
+                            TerminalView(server: server)
                         } label: {
 
                             VStack(

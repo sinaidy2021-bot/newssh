@@ -1,52 +1,54 @@
 import SwiftUI
-import UniformTypeIdentifiers
 import UIKit
+import UniformTypeIdentifiers
 
-// MARK: - 快捷命令
+// MARK: - Quick Command
 
-struct QuickCmd: Identifiable, Codable, Equatable {
+struct QuickCmd:
+    Identifiable,
+    Codable,
+    Equatable {
+
     var id = UUID()
+
     var name: String
+
     var cmd: String
 }
 
-// MARK: - 命令编辑器控制器
+// MARK: - Command Editor Bridge
 
-final class CommandEditorBridge: ObservableObject {
+final class CommandEditorBridge:
+    ObservableObject {
 
     weak var textView: UITextView?
 
-    func insert(_ text: String) {
+    func insert(
+        _ text: String
+    ) {
 
-        guard let textView = textView else {
-            return
-        }
-
-        textView.insertText(text)
+        textView?.insertText(
+            text
+        )
     }
 
     func paste() {
 
-        guard let textView = textView else {
-            return
-        }
-
-        textView.paste(nil)
+        textView?.paste(nil)
     }
 
     func backspace() {
 
-        guard let textView = textView else {
-            return
-        }
-
-        textView.deleteBackward()
+        textView?.deleteBackward()
     }
 
     func moveLeft() {
 
-        guard let textView = textView,
-              let range = textView.selectedTextRange else {
+        guard
+            let textView,
+            let range =
+                textView.selectedTextRange
+        else {
             return
         }
 
@@ -68,8 +70,11 @@ final class CommandEditorBridge: ObservableObject {
 
     func moveRight() {
 
-        guard let textView = textView,
-              let range = textView.selectedTextRange else {
+        guard
+            let textView,
+            let range =
+                textView.selectedTextRange
+        else {
             return
         }
 
@@ -91,20 +96,27 @@ final class CommandEditorBridge: ObservableObject {
 
     func moveUp() {
 
-        moveVertical(-1)
+        moveVertical(
+            -1
+        )
     }
 
     func moveDown() {
 
-        moveVertical(1)
+        moveVertical(
+            1
+        )
     }
 
     private func moveVertical(
         _ direction: CGFloat
     ) {
 
-        guard let textView = textView,
-              let range = textView.selectedTextRange else {
+        guard
+            let textView,
+            let range =
+                textView.selectedTextRange
+        else {
             return
         }
 
@@ -113,15 +125,19 @@ final class CommandEditorBridge: ObservableObject {
                 for: range.start
             )
 
-        let point = CGPoint(
-            x: caret.midX,
-            y: caret.midY
-                + direction *
-                max(
-                    textView.font?.lineHeight ?? 18,
-                    18
-                )
-        )
+        let lineHeight =
+            max(
+                textView.font?.lineHeight ?? 18,
+                18
+            )
+
+        let point =
+            CGPoint(
+                x: caret.midX,
+                y:
+                    caret.midY
+                    + direction * lineHeight
+            )
 
         if let position =
             textView.closestPosition(
@@ -137,26 +153,32 @@ final class CommandEditorBridge: ObservableObject {
     }
 }
 
-// MARK: - 真正可自由定位光标的输入框
+// MARK: - Command Editor
 
-struct CommandEditorView: UIViewRepresentable {
+struct CommandEditorView:
+    UIViewRepresentable {
 
     @Binding var text: String
 
     @Binding var systemKeyboardEnabled: Bool
 
-    let bridge: CommandEditorBridge
+    let bridge:
+        CommandEditorBridge
 
-    let onSubmit: () -> Void
+    let onSubmit:
+        () -> Void
 
     func makeCoordinator()
         -> Coordinator {
 
-        Coordinator(self)
+        Coordinator(
+            self
+        )
     }
 
     func makeUIView(
-        context: Context
+        context:
+            Context
     ) -> UITextView {
 
         let textView =
@@ -212,15 +234,14 @@ struct CommandEditorView: UIViewRepresentable {
                 right: 0
             )
 
-        textView.textContainer.lineFragmentPadding =
-            0
+        textView.textContainer
+            .lineFragmentPadding = 0
 
         textView.text =
             text
 
-        // 默认不弹 iPhone 系统键盘。
-        // 仍然保留真正 UITextView 的光标、选择、
-        // 长按复制、拖动光标等能力。
+        // 默认关闭系统键盘，
+        // 但 UITextView 本身仍然可以操作光标。
         textView.inputView =
             UIView(
                 frame: .zero
@@ -234,7 +255,8 @@ struct CommandEditorView: UIViewRepresentable {
 
     func updateUIView(
         _ uiView: UITextView,
-        context: Context
+        context:
+            Context
     ) {
 
         bridge.textView =
@@ -256,12 +278,14 @@ struct CommandEditorView: UIViewRepresentable {
 
             uiView.selectedRange =
                 NSRange(
-                    location: safeLocation,
+                    location:
+                        safeLocation,
                     length: 0
                 )
         }
 
-        if context.coordinator.lastSystemKeyboardState
+        if context.coordinator
+            .lastSystemKeyboardState
             != systemKeyboardEnabled {
 
             context.coordinator
@@ -287,17 +311,7 @@ struct CommandEditorView: UIViewRepresentable {
                         frame: .zero
                     )
 
-                if uiView.isFirstResponder {
-
-                    uiView.reloadInputViews()
-
-                } else {
-
-                    DispatchQueue.main.async {
-
-                        uiView.becomeFirstResponder()
-                    }
-                }
+                uiView.reloadInputViews()
             }
         }
     }
@@ -306,14 +320,17 @@ struct CommandEditorView: UIViewRepresentable {
         NSObject,
         UITextViewDelegate {
 
-        var parent: CommandEditorView
+        var parent:
+            CommandEditorView
 
         var lastSystemKeyboardState =
             false
 
         init(
-            _ parent: CommandEditorView
+            _ parent:
+                CommandEditorView
         ) {
+
             self.parent =
                 parent
         }
@@ -332,7 +349,6 @@ struct CommandEditorView: UIViewRepresentable {
             replacementText text: String
         ) -> Bool {
 
-            // 系统键盘回车直接执行。
             if text == "\n" {
 
                 parent.onSubmit()
@@ -345,28 +361,30 @@ struct CommandEditorView: UIViewRepresentable {
     }
 }
 
-// MARK: - Terminal
+// MARK: - Terminal View
 
-struct TerminalView: View {
+struct TerminalView:
+    View {
 
     let serverName: String
+
     let host: String
+
     let port: Int
+
     let username: String
+
     let password: String
 
     @StateObject private var session =
         SSHSession()
 
-    // 真正的命令输入内容
     @State private var inputCommand =
         ""
 
-    // 系统键盘开关
     @State private var systemKeyboardEnabled =
         false
 
-    // UITextView 控制器
     @StateObject private var editorBridge =
         CommandEditorBridge()
 
@@ -391,548 +409,41 @@ struct TerminalView: View {
     private let storageKey =
         "SavedQuickCommands"
 
-    // MARK: - Body
+    // MARK: Body
 
     var body: some View {
 
         ZStack {
 
-            VStack(spacing: 0) {
+            VStack(
+                spacing: 0
+            ) {
 
-                // MARK: 顶部快捷命令
+                quickCommandBar
 
-                ScrollView(
-                    .horizontal,
-                    showsIndicators: false
-                ) {
-
-                    HStack(spacing: 8) {
-
-                        Button {
-                            showingAddSheet = true
-                        } label: {
-
-                            HStack(spacing: 3) {
-
-                                Image(
-                                    systemName: "plus"
-                                )
-
-                                Text("添加")
-                            }
-                            .font(
-                                .system(
-                                    size: 11,
-                                    weight: .bold
-                                )
-                            )
-                            .padding(
-                                .horizontal,
-                                9
-                            )
-                            .padding(
-                                .vertical,
-                                5
-                            )
-                            .background(
-                                Color.blue.opacity(0.3)
-                            )
-                            .foregroundColor(.blue)
-                            .cornerRadius(6)
-                        }
-
-                        ForEach(
-                            quickCommands
-                        ) { item in
-
-                            Button {
-
-                                runCommand(
-                                    item.cmd
-                                )
-
-                            } label: {
-
-                                Text(item.name)
-                                    .font(
-                                        .system(
-                                            size: 11,
-                                            weight: .medium
-                                        )
-                                    )
-                                    .padding(
-                                        .horizontal,
-                                        9
-                                    )
-                                    .padding(
-                                        .vertical,
-                                        5
-                                    )
-                                    .background(
-                                        Color(white: 0.18)
-                                    )
-                                    .foregroundColor(.white)
-                                    .cornerRadius(6)
-                            }
-                            .contextMenu {
-
-                                Button(
-                                    role: .destructive
-                                ) {
-
-                                    deleteQuickCmd(
-                                        item
-                                    )
-
-                                } label: {
-
-                                    Label(
-                                        "删除快捷键",
-                                        systemImage:
-                                            "trash"
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    .padding(
-                        .horizontal,
-                        10
-                    )
-                    .padding(
-                        .vertical,
-                        6
-                    )
-                }
-                .background(
-                    Color(white: 0.12)
-                )
-
-                // MARK: 终端
-
-                ScrollViewReader { proxy in
-
-                    ScrollView {
-
-                        LazyVStack(
-                            alignment: .leading,
-                            spacing: 10
-                        ) {
-
-                            ForEach(
-                                session.history
-                            ) { item in
-
-                                VStack(
-                                    alignment: .leading,
-                                    spacing: 6
-                                ) {
-
-                                    if item.command ==
-                                        "system" {
-
-                                        HStack {
-
-                                            Text(
-                                                "[系统状态]"
-                                            )
-                                            .font(
-                                                .system(
-                                                    size: 11,
-                                                    weight: .bold,
-                                                    design: .monospaced
-                                                )
-                                            )
-                                            .foregroundColor(
-                                                .yellow.opacity(0.8)
-                                            )
-
-                                            Spacer()
-
-                                            Button {
-
-                                                copyBlock(
-                                                    item.output,
-                                                    tip:
-                                                        "已复制系统信息"
-                                                )
-
-                                            } label: {
-
-                                                Image(
-                                                    systemName:
-                                                        "doc.on.doc"
-                                                )
-                                                .font(
-                                                    .system(
-                                                        size: 11
-                                                    )
-                                                )
-                                                .foregroundColor(
-                                                    .gray
-                                                )
-                                            }
-                                        }
-
-                                        renderOutputLines(
-                                            item.output,
-                                            defaultColor:
-                                                .yellow
-                                        )
-
-                                    } else {
-
-                                        // MARK: 命令头
-
-                                        HStack(
-                                            alignment: .center,
-                                            spacing: 4
-                                        ) {
-
-                                            Text(
-                                                "\(item.prompt.isEmpty ? session.currentPrompt : item.prompt) "
-                                            )
-                                            .font(
-                                                .system(
-                                                    size: 13,
-                                                    weight: .bold,
-                                                    design: .monospaced
-                                                )
-                                            )
-                                            .foregroundColor(
-                                                .cyan
-                                            )
-
-                                            Text(
-                                                item.command
-                                            )
-                                            .font(
-                                                .system(
-                                                    size: 13,
-                                                    weight: .bold,
-                                                    design: .monospaced
-                                                )
-                                            )
-                                            .foregroundColor(
-                                                .white
-                                            )
-                                            .textSelection(
-                                                .enabled
-                                            )
-
-                                            Spacer(
-                                                minLength: 4
-                                            )
-                                        }
-
-                                        // MARK: 该命令自己的输出
-
-                                        renderOutputLines(
-                                            item.output,
-                                            defaultColor:
-                                                .green
-                                        )
-
-                                        // MARK: 复制按钮
-
-                                        HStack(spacing: 6) {
-
-                                            Button {
-
-                                                copyBlock(
-                                                    item.output,
-                                                    tip:
-                                                        "已复制本段输出"
-                                                )
-
-                                            } label: {
-
-                                                HStack(
-                                                    spacing: 4
-                                                ) {
-
-                                                    Image(
-                                                        systemName:
-                                                            "doc.on.doc"
-                                                    )
-
-                                                    Text(
-                                                        "复制本段输出"
-                                                    )
-                                                }
-                                                .font(
-                                                    .system(
-                                                        size: 10,
-                                                        weight: .medium
-                                                    )
-                                                )
-                                                .foregroundColor(
-                                                    .gray
-                                                )
-                                                .padding(
-                                                    .horizontal,
-                                                    7
-                                                )
-                                                .padding(
-                                                    .vertical,
-                                                    4
-                                                )
-                                                .background(
-                                                    Color(
-                                                        white: 0.16
-                                                    )
-                                                )
-                                                .cornerRadius(4)
-                                            }
-
-                                            Button {
-
-                                                let prompt =
-                                                    item.prompt.isEmpty
-                                                    ? session.currentPrompt
-                                                    : item.prompt
-
-                                                let fullBlock =
-                                                    "\(prompt) \(item.command)\n" +
-                                                    item.output
-
-                                                copyBlock(
-                                                    fullBlock,
-                                                    tip:
-                                                        "已复制整段"
-                                                )
-
-                                            } label: {
-
-                                                HStack(
-                                                    spacing: 4
-                                                ) {
-
-                                                    Image(
-                                                        systemName:
-                                                            "doc.on.doc.fill"
-                                                    )
-
-                                                    Text(
-                                                        "复制整段"
-                                                    )
-                                                }
-                                                .font(
-                                                    .system(
-                                                        size: 10,
-                                                        weight: .medium
-                                                    )
-                                                )
-                                                .foregroundColor(
-                                                    .gray
-                                                )
-                                                .padding(
-                                                    .horizontal,
-                                                    7
-                                                )
-                                                .padding(
-                                                    .vertical,
-                                                    4
-                                                )
-                                                .background(
-                                                    Color(
-                                                        white: 0.16
-                                                    )
-                                                )
-                                                .cornerRadius(4)
-                                            }
-
-                                            Spacer()
-                                        }
-                                    }
-                                }
-                                .padding(8)
-                                .background(
-                                    Color(white: 0.05)
-                                )
-                                .cornerRadius(6)
-                                .id(item.id)
-                            }
-
-                            // MARK: 当前命令输入
-
-                            if session.isConnected {
-
-                                HStack(
-                                    alignment: .top,
-                                    spacing: 4
-                                ) {
-
-                                    Text(
-                                        session.currentPrompt
-                                    )
-                                    .font(
-                                        .system(
-                                            size: 13,
-                                            weight: .bold,
-                                            design: .monospaced
-                                        )
-                                    )
-                                    .foregroundColor(
-                                        .cyan
-                                    )
-                                    .padding(
-                                        .top,
-                                        3
-                                    )
-
-                                    CommandEditorView(
-                                        text:
-                                            $inputCommand,
-                                        systemKeyboardEnabled:
-                                            $systemKeyboardEnabled,
-                                        bridge:
-                                            editorBridge,
-                                        onSubmit: {
-                                            executeCurrentInput()
-                                        }
-                                    )
-                                    .frame(
-                                        minHeight: 22,
-                                        maxHeight: 120
-                                    )
-
-                                    Spacer(
-                                        minLength: 0
-                                    )
-                                }
-                                .padding(
-                                    .horizontal,
-                                    8
-                                )
-                                .padding(
-                                    .top,
-                                    2
-                                )
-                                .id(
-                                    "CURRENT_PROMPT"
-                                )
-                            }
-
-                            Color.clear
-                                .frame(height: 8)
-                                .id(
-                                    "BOTTOM_ANCHOR"
-                                )
-                        }
-                        .padding(8)
-                        .frame(
-                            maxWidth: .infinity,
-                            alignment: .topLeading
-                        )
-                    }
-                    .background(
-                        Color.black
-                    )
-                    .onChange(
-                        of: session.history.count
-                    ) { _ in
-
-                        scrollToBottom(
-                            proxy: proxy
-                        )
-                    }
-                    .onChange(
-                        of: session.history.last?.output
-                    ) { _ in
-
-                        scrollToBottom(
-                            proxy: proxy
-                        )
-                    }
-                    .onChange(
-                        of: session.currentPrompt
-                    ) { _ in
-
-                        scrollToBottom(
-                            proxy: proxy
-                        )
-                    }
-                    .onChange(
-                        of: inputCommand
-                    ) { _ in
-
-                        scrollToCurrentCommand(
-                            proxy: proxy
-                        )
-                    }
-                }
-
-                // MARK: 紧凑快捷键栏
+                terminalArea
 
                 compactKeyboard
                     .background(
-                        Color(white: 0.075)
+                        Color(
+                            white: 0.075
+                        )
                     )
             }
 
-            // MARK: 左下角系统键盘按钮
+            toastView
 
-            VStack {
-
-                Spacer()
-
-                HStack {
-
-                    Button {
-
-                        systemKeyboardEnabled.toggle()
-
-                        DispatchQueue.main.async {
-                            editorBridge.textView?
-                                .becomeFirstResponder()
-                        }
-
-                    } label: {
-
-                        Image(
-                            systemName:
-                                systemKeyboardEnabled
-                                ? "keyboard.chevron.compact.down"
-                                : "keyboard"
-                        )
-                        .font(
-                            .system(
-                                size: 14,
-                                weight: .bold
-                            )
-                        )
-                        .foregroundColor(.white)
-                        .frame(
-                            width: 34,
-                            height: 34
-                        )
-                        .background(
-                            Color(white: 0.22)
-                        )
-                        .clipShape(
-                            Circle()
-                        )
-                    }
-                    .padding(
-                        .leading,
-                        7
-                    )
-                    .padding(
-                        .bottom,
-                        4
-                    )
-
-                    Spacer()
-                }
-            }
+            keyboardButton
         }
+
         .navigationTitle(
             serverName
         )
+
         .navigationBarTitleDisplayMode(
             .inline
         )
+
         .toolbar {
 
             ToolbarItem(
@@ -957,89 +468,15 @@ struct TerminalView: View {
                 }
             }
         }
+
         .sheet(
             isPresented:
                 $showingAddSheet
         ) {
 
-            NavigationView {
-
-                Form {
-
-                    Section(
-                        header:
-                            Text("快捷键属性")
-                    ) {
-
-                        TextField(
-                            "按键名称 (例如: 3x-ui / x-ui)",
-                            text:
-                                $newCmdName
-                        )
-
-                        TextField(
-                            "执行命令 (例如: x-ui)",
-                            text:
-                                $newCmdContent
-                        )
-                        .autocapitalization(
-                            .none
-                        )
-                        .disableAutocorrection(
-                            true
-                        )
-                    }
-                }
-                .navigationTitle(
-                    "添加快捷键"
-                )
-                .navigationBarTitleDisplayMode(
-                    .inline
-                )
-                .toolbar {
-
-                    ToolbarItem(
-                        placement:
-                            .cancellationAction
-                    ) {
-
-                        Button("取消") {
-
-                            showingAddSheet =
-                                false
-                        }
-                    }
-
-                    ToolbarItem(
-                        placement:
-                            .confirmationAction
-                    ) {
-
-                        Button("保存") {
-
-                            addQuickCmd()
-
-                            showingAddSheet =
-                                false
-
-                        }
-                        .disabled(
-                            newCmdName
-                                .trimmingCharacters(
-                                    in: .whitespaces
-                                )
-                                .isEmpty
-                            ||
-                            newCmdContent
-                                .trimmingCharacters(
-                                    in: .whitespaces
-                                )
-                                .isEmpty
-                        )
-                    }
-                }
-            }
+            addCommandSheet
         }
+
         .onAppear {
 
             loadQuickCommands()
@@ -1049,6 +486,7 @@ struct TerminalView: View {
                 connectToServer()
             }
         }
+
         .onChange(
             of: scenePhase
         ) { phase in
@@ -1064,22 +502,756 @@ struct TerminalView: View {
                 session.appWillEnterForeground()
 
             default:
+
                 break
             }
         }
     }
 
-    // MARK: - 紧凑快捷键栏
+    // MARK: Quick Command Bar
 
-    private var compactKeyboard: some View {
+    private var quickCommandBar:
+        some View {
+
+        ScrollView(
+            .horizontal,
+            showsIndicators: false
+        ) {
+
+            HStack(
+                spacing: 8
+            ) {
+
+                Button {
+
+                    showingAddSheet =
+                        true
+
+                } label: {
+
+                    HStack(
+                        spacing: 3
+                    ) {
+
+                        Image(
+                            systemName:
+                                "plus"
+                        )
+
+                        Text(
+                            "添加"
+                        )
+                    }
+                    .font(
+                        .system(
+                            size: 11,
+                            weight: .bold
+                        )
+                    )
+                    .padding(
+                        .horizontal,
+                        9
+                    )
+                    .padding(
+                        .vertical,
+                        5
+                    )
+                    .background(
+                        Color.blue.opacity(
+                            0.3
+                        )
+                    )
+                    .foregroundColor(
+                        .blue
+                    )
+                    .cornerRadius(
+                        6
+                    )
+                }
+
+                ForEach(
+                    quickCommands
+                ) { item in
+
+                    Button {
+
+                        runCommand(
+                            item.cmd
+                        )
+
+                    } label: {
+
+                        Text(
+                            item.name
+                        )
+                        .font(
+                            .system(
+                                size: 11,
+                                weight: .medium
+                            )
+                        )
+                        .padding(
+                            .horizontal,
+                            9
+                        )
+                        .padding(
+                            .vertical,
+                            5
+                        )
+                        .background(
+                            Color(
+                                white: 0.18
+                            )
+                        )
+                        .foregroundColor(
+                            .white
+                        )
+                        .cornerRadius(
+                            6
+                        )
+                    }
+                    .contextMenu {
+
+                        Button(
+                            role:
+                                .destructive
+                        ) {
+
+                            deleteQuickCmd(
+                                item
+                            )
+
+                        } label: {
+
+                            Label(
+                                "删除快捷键",
+                                systemImage:
+                                    "trash"
+                            )
+                        }
+                    }
+                }
+            }
+            .padding(
+                .horizontal,
+                10
+            )
+            .padding(
+                .vertical,
+                6
+            )
+        }
+        .background(
+            Color(
+                white: 0.12
+            )
+        )
+    }
+
+    // MARK: Terminal Area
+
+    private var terminalArea:
+        some View {
+
+        ScrollViewReader { proxy in
+
+            ScrollView {
+
+                LazyVStack(
+                    alignment:
+                        .leading,
+                    spacing: 10
+                ) {
+
+                    ForEach(
+                        session.history
+                    ) { item in
+
+                        commandBlock(
+                            item
+                        )
+                        .id(
+                            item.id
+                        )
+                    }
+
+                    if session.isConnected {
+
+                        currentInputView
+                            .id(
+                                "CURRENT_INPUT"
+                            )
+                    }
+
+                    Color.clear
+                        .frame(
+                            height: 8
+                        )
+                        .id(
+                            "BOTTOM"
+                        )
+                }
+                .padding(
+                    8
+                )
+                .frame(
+                    maxWidth:
+                        .infinity,
+                    alignment:
+                        .topLeading
+                )
+            }
+            .background(
+                Color.black
+            )
+
+            .onChange(
+                of:
+                    session.history.count
+            ) { _ in
+
+                scrollBottom(
+                    proxy
+                )
+            }
+
+            .onChange(
+                of:
+                    session.history.last?.output
+            ) { _ in
+
+                scrollBottom(
+                    proxy
+                )
+            }
+
+            .onChange(
+                of:
+                    session.currentPrompt
+            ) { _ in
+
+                scrollBottom(
+                    proxy
+                )
+            }
+
+            .onChange(
+                of:
+                    inputCommand
+            ) { _ in
+
+                scrollBottom(
+                    proxy
+                )
+            }
+        }
+    }
+
+    // MARK: Command Block
+
+    private func commandBlock(
+        _ item:
+            CommandHistoryItem
+    ) -> some View {
+
+        VStack(
+            alignment:
+                .leading,
+            spacing: 6
+        ) {
+
+            if item.command == "system" {
+
+                HStack {
+
+                    Text(
+                        "[系统状态]"
+                    )
+                    .font(
+                        .system(
+                            size: 11,
+                            weight: .bold,
+                            design:
+                                .monospaced
+                        )
+                    )
+                    .foregroundColor(
+                        .yellow
+                    )
+
+                    Spacer()
+
+                    copyButton(
+                        title:
+                            "复制",
+                        text:
+                            item.output
+                    )
+                }
+
+                renderOutput(
+                    item.output,
+                    color:
+                        .yellow
+                )
+
+            } else {
+
+                // -----------------------------
+                // 命令
+                // -----------------------------
+
+                HStack(
+                    alignment:
+                        .top,
+                    spacing: 4
+                ) {
+
+                    Text(
+                        item.prompt.isEmpty
+                        ? session.currentPrompt
+                        : item.prompt
+                    )
+                    .font(
+                        .system(
+                            size: 13,
+                            weight: .bold,
+                            design:
+                                .monospaced
+                        )
+                    )
+                    .foregroundColor(
+                        .cyan
+                    )
+
+                    Text(
+                        item.command
+                    )
+                    .font(
+                        .system(
+                            size: 13,
+                            weight: .bold,
+                            design:
+                                .monospaced
+                        )
+                    )
+                    .foregroundColor(
+                        .white
+                    )
+                    .textSelection(
+                        .enabled
+                    )
+
+                    Spacer()
+                }
+
+                // -----------------------------
+                // 输出
+                // -----------------------------
+
+                if !item.output.isEmpty {
+
+                    renderOutput(
+                        item.output,
+                        color:
+                            .green
+                    )
+                }
+
+                // -----------------------------
+                // 操作
+                // -----------------------------
+
+                HStack(
+                    spacing: 6
+                ) {
+
+                    copyButton(
+                        title:
+                            "复制输出",
+                        text:
+                            item.output
+                    )
+
+                    let prompt =
+                        item.prompt.isEmpty
+                        ? session.currentPrompt
+                        : item.prompt
+
+                    copyButton(
+                        title:
+                            "复制整段",
+                        text:
+                            "\(prompt) \(item.command)\n\(item.output)"
+                    )
+
+                    Spacer()
+                }
+            }
+        }
+        .padding(
+            8
+        )
+        .background(
+            Color(
+                white: 0.05
+            )
+        )
+        .cornerRadius(
+            6
+        )
+    }
+
+    // MARK: Output
+
+    @ViewBuilder
+    private func renderOutput(
+        _ text: String,
+        color: Color
+    ) -> some View {
+
+        let lines =
+            text.components(
+                separatedBy:
+                    "\n"
+            )
+
+        VStack(
+            alignment:
+                .leading,
+            spacing: 2
+        ) {
+
+            ForEach(
+                Array(
+                    lines.enumerated()
+                ),
+                id:
+                    \.offset
+            ) { _, line in
+
+                outputLine(
+                    line,
+                    color:
+                        color
+                )
+            }
+        }
+    }
+
+    // MARK: Output Line
+
+    @ViewBuilder
+    private func outputLine(
+        _ line: String,
+        color: Color
+    ) -> some View {
+
+        let value =
+            line.trimmingCharacters(
+                in: .whitespaces
+            )
+
+        // -----------------------------
+        // 空行
+        // -----------------------------
+
+        if value.isEmpty {
+
+            Text(" ")
+                .font(
+                    .system(
+                        size: 13,
+                        design:
+                            .monospaced
+                    )
+                )
+
+            return
+        }
+
+        // -----------------------------
+        // key: value
+        // -----------------------------
+
+        if let colon =
+            value.firstIndex(
+                of: ":"
+            ) {
+
+            let key =
+                String(
+                    value[
+                        ..<colon
+                    ]
+                )
+                .trimmingCharacters(
+                    in:
+                        .whitespacesAndNewlines
+                )
+
+            let copiedValue =
+                String(
+                    value[
+                        value.index(
+                            after:
+                                colon
+                        )...
+                    ]
+                )
+                .trimmingCharacters(
+                    in:
+                        .whitespacesAndNewlines
+                )
+
+            // 避免把普通 URL / 时间等乱识别
+            let shouldShowCopy =
+                !key.isEmpty
+                &&
+                !copiedValue.isEmpty
+                &&
+                key.count <= 40
+
+            HStack(
+                alignment:
+                    .center,
+                spacing: 6
+            ) {
+
+                Text(
+                    line.isEmpty
+                    ? " "
+                    : line
+                )
+                .font(
+                    .system(
+                        size: 13,
+                        design:
+                            .monospaced
+                    )
+                )
+                .foregroundColor(
+                    color
+                )
+                .textSelection(
+                    .enabled
+                )
+
+                Spacer(
+                    minLength: 3
+                )
+
+                if shouldShowCopy {
+
+                    Button {
+
+                        UIPasteboard
+                            .general
+                            .string =
+                            copiedValue
+
+                        showToast(
+                            "已复制 \(key)"
+                        )
+
+                    } label: {
+
+                        HStack(
+                            spacing: 3
+                        ) {
+
+                            Image(
+                                systemName:
+                                    "doc.on.doc"
+                            )
+
+                            Text(
+                                "复制值"
+                            )
+                        }
+                        .font(
+                            .system(
+                                size: 10,
+                                weight:
+                                    .medium
+                            )
+                        )
+                        .foregroundColor(
+                            .cyan
+                        )
+                        .padding(
+                            .horizontal,
+                            5
+                        )
+                        .padding(
+                            .vertical,
+                            4
+                        )
+                        .background(
+                            Color(
+                                white: 0.18
+                            )
+                        )
+                        .cornerRadius(
+                            4
+                        )
+                    }
+                }
+            }
+
+        } else {
+
+            Text(
+                line
+            )
+            .font(
+                .system(
+                    size: 13,
+                    design:
+                        .monospaced
+                )
+            )
+            .foregroundColor(
+                color
+            )
+            .textSelection(
+                .enabled
+            )
+        }
+    }
+
+    // MARK: Copy Button
+
+    private func copyButton(
+        title: String,
+        text: String
+    ) -> some View {
+
+        Button {
+
+            UIPasteboard
+                .general
+                .string =
+                text
+
+            showToast(
+                "已复制"
+            )
+
+        } label: {
+
+            HStack(
+                spacing: 4
+            ) {
+
+                Image(
+                    systemName:
+                        "doc.on.doc"
+                )
+
+                Text(
+                    title
+                )
+            }
+            .font(
+                .system(
+                    size: 10,
+                    weight:
+                        .medium
+                )
+            )
+            .foregroundColor(
+                .gray
+            )
+            .padding(
+                .horizontal,
+                7
+            )
+            .padding(
+                .vertical,
+                4
+            )
+            .background(
+                Color(
+                    white: 0.16
+                )
+            )
+            .cornerRadius(
+                4
+            )
+        }
+    }
+
+    // MARK: Current Input
+
+    private var currentInputView:
+        some View {
+
+        HStack(
+            alignment:
+                .top,
+            spacing: 4
+        ) {
+
+            Text(
+                session.currentPrompt
+            )
+            .font(
+                .system(
+                    size: 13,
+                    weight:
+                        .bold,
+                    design:
+                        .monospaced
+                )
+            )
+            .foregroundColor(
+                .cyan
+            )
+            .padding(
+                .top,
+                3
+            )
+
+            CommandEditorView(
+                text:
+                    $inputCommand,
+                systemKeyboardEnabled:
+                    $systemKeyboardEnabled,
+                bridge:
+                    editorBridge,
+                onSubmit: {
+
+                    executeCurrentInput()
+                }
+            )
+            .frame(
+                minHeight: 22,
+                maxHeight: 120
+            )
+
+            Spacer(
+                minLength: 0
+            )
+        }
+        .padding(
+            .horizontal,
+            8
+        )
+        .padding(
+            .top,
+            2
+        )
+    }
+
+    // MARK: Compact Keyboard
+
+    private var compactKeyboard:
+        some View {
 
         VStack(
             spacing: 2
         ) {
-
-            // -----------------------------------------
-            // 第一行：数字，可横向滑动
-            // -----------------------------------------
 
             horizontalKeyRow(
                 [
@@ -1095,10 +1267,6 @@ struct TerminalView: View {
                     ("0", nil)
                 ]
             )
-
-            // -----------------------------------------
-            // 第二行：Ctrl 快捷键
-            // -----------------------------------------
 
             horizontalKeyRow(
                 [
@@ -1116,10 +1284,6 @@ struct TerminalView: View {
                 ]
             )
 
-            // -----------------------------------------
-            // 第三行：方向 + 常用符号
-            // -----------------------------------------
-
             horizontalKeyRow(
                 [
                     ("↑", "上条"),
@@ -1136,11 +1300,6 @@ struct TerminalView: View {
                     ("~", nil)
                 ]
             )
-
-            // -----------------------------------------
-            // 第四行：
-            // 左边功能键，右下角固定回车
-            // -----------------------------------------
 
             HStack(
                 spacing: 3
@@ -1187,7 +1346,9 @@ struct TerminalView: View {
                     hint:
                         "剪贴板",
                     color:
-                        Color.blue.opacity(0.35)
+                        Color.blue.opacity(
+                            0.35
+                        )
                 ) {
 
                     pasteClipboard()
@@ -1197,7 +1358,6 @@ struct TerminalView: View {
                     minLength: 3
                 )
 
-                // 回车永远在最右边
                 Button {
 
                     executeCurrentInput()
@@ -1208,20 +1368,29 @@ struct TerminalView: View {
                         spacing: 0
                     ) {
 
-                        Text("回车")
-                            .font(
-                                .system(
-                                    size: 10,
-                                    weight: .bold
-                                )
+                        Text(
+                            session.commandIsRunning
+                            ? "发送"
+                            : "回车"
+                        )
+                        .font(
+                            .system(
+                                size: 10,
+                                weight:
+                                    .bold
                             )
+                        )
 
-                        Text("执行")
-                            .font(
-                                .system(
-                                    size: 7
-                                )
+                        Text(
+                            session.commandIsRunning
+                            ? "输入"
+                            : "执行"
+                        )
+                        .font(
+                            .system(
+                                size: 7
                             )
+                        )
                     }
                     .frame(
                         width: 68,
@@ -1233,7 +1402,9 @@ struct TerminalView: View {
                     .foregroundColor(
                         .white
                     )
-                    .cornerRadius(5)
+                    .cornerRadius(
+                        5
+                    )
                 }
             }
         }
@@ -1251,10 +1422,11 @@ struct TerminalView: View {
         )
     }
 
-    // MARK: - 横向键盘行
+    // MARK: Horizontal Keyboard Row
 
     private func horizontalKeyRow(
-        _ keys: [(String, String?)]
+        _ keys:
+            [(String, String?)]
     ) -> some View {
 
         ScrollView(
@@ -1270,28 +1442,24 @@ struct TerminalView: View {
                     Array(
                         keys.enumerated()
                     ),
-                    id: \.offset
+                    id:
+                        \.offset
                 ) { _, item in
 
-                    let label =
-                        item.0
-
-                    let hint =
-                        item.1
-
                     miniKey(
-                        label,
-                        hint: hint
+                        item.0,
+                        hint:
+                            item.1
                     ) {
 
                         handleKey(
-                            label
+                            item.0
                         )
                     }
                     .frame(
                         width:
                             keyWidth(
-                                label
+                                item.0
                             )
                     )
                 }
@@ -1314,22 +1482,22 @@ struct TerminalView: View {
             return 30
         }
 
-        if label.hasPrefix("Ctrl+") {
+        if label.hasPrefix(
+            "Ctrl+"
+        ) {
             return 62
         }
 
-        if label == "Tab" {
-            return 48
-        }
+        if label == "Tab"
+            || label == "Esc" {
 
-        if label == "Esc" {
             return 48
         }
 
         return 48
     }
 
-    // MARK: - 快捷键处理
+    // MARK: Key Handling
 
     private func handleKey(
         _ label: String
@@ -1427,27 +1595,31 @@ struct TerminalView: View {
         }
     }
 
-    // MARK: - 软键
+    // MARK: Mini Key
 
     private func miniKey(
         _ label: String,
         hint: String? = nil,
         icon: String? = nil,
         color:
-            Color = Color(white: 0.20),
+            Color =
+                Color(
+                    white: 0.20
+                ),
         action:
             @escaping () -> Void
     ) -> some View {
 
         Button(
-            action: action
+            action:
+                action
         ) {
 
             VStack(
                 spacing: 0
             ) {
 
-                if let icon = icon {
+                if let icon {
 
                     Image(
                         systemName:
@@ -1460,34 +1632,43 @@ struct TerminalView: View {
                     )
                 }
 
-                Text(label)
+                Text(
+                    label
+                )
+                .font(
+                    .system(
+                        size:
+                            label.count > 5
+                            ? 8
+                            : 10,
+                        weight:
+                            .medium,
+                        design:
+                            .monospaced
+                    )
+                )
+                .lineLimit(
+                    1
+                )
+
+                if let hint {
+
+                    Text(
+                        hint
+                    )
                     .font(
                         .system(
-                            size:
-                                label.count > 5
-                                ? 8
-                                : 10,
-                            weight:
-                                .medium,
-                            design:
-                                .monospaced
+                            size: 7
                         )
                     )
-                    .lineLimit(1)
-
-                if let hint = hint {
-
-                    Text(hint)
-                        .font(
-                            .system(
-                                size: 7
-                            )
-                        )
-                        .lineLimit(1)
+                    .lineLimit(
+                        1
+                    )
                 }
             }
             .frame(
-                maxWidth: .infinity
+                maxWidth:
+                    .infinity
             )
             .frame(
                 height:
@@ -1501,17 +1682,138 @@ struct TerminalView: View {
             .foregroundColor(
                 .white
             )
-            .cornerRadius(4)
+            .cornerRadius(
+                4
+            )
         }
     }
 
-    // MARK: - 粘贴
+    // MARK: Keyboard Button
+
+    private var keyboardButton:
+        some View {
+
+        VStack {
+
+            Spacer()
+
+            HStack {
+
+                Button {
+
+                    systemKeyboardEnabled.toggle()
+
+                    DispatchQueue.main.async {
+
+                        editorBridge.textView?
+                            .becomeFirstResponder()
+                    }
+
+                } label: {
+
+                    Image(
+                        systemName:
+                            systemKeyboardEnabled
+                            ? "keyboard.chevron.compact.down"
+                            : "keyboard"
+                    )
+                    .font(
+                        .system(
+                            size: 14,
+                            weight: .bold
+                        )
+                    )
+                    .foregroundColor(
+                        .white
+                    )
+                    .frame(
+                        width: 34,
+                        height: 34
+                    )
+                    .background(
+                        Color(
+                            white: 0.22
+                        )
+                    )
+                    .clipShape(
+                        Circle()
+                    )
+                }
+                .padding(
+                    .leading,
+                    7
+                )
+                .padding(
+                    .bottom,
+                    4
+                )
+
+                Spacer()
+            }
+        }
+    }
+
+    // MARK: Toast
+
+    @ViewBuilder
+    private var toastView:
+        some View {
+
+        if let copiedTip {
+
+            VStack {
+
+                Spacer()
+
+                Text(
+                    copiedTip
+                )
+                .font(
+                    .system(
+                        size: 12,
+                        weight: .medium
+                    )
+                )
+                .foregroundColor(
+                    .white
+                )
+                .padding(
+                    .horizontal,
+                    12
+                )
+                .padding(
+                    .vertical,
+                    8
+                )
+                .background(
+                    Color.black.opacity(
+                        0.85
+                    )
+                )
+                .cornerRadius(
+                    8
+                )
+                .padding(
+                    .bottom,
+                    100
+                )
+            }
+            .transition(
+                .opacity
+            )
+        }
+    }
+
+    // MARK: Paste
 
     private func pasteClipboard() {
 
-        guard let pasteString =
-                UIPasteboard.general.string,
-              !pasteString.isEmpty
+        guard
+            let string =
+                UIPasteboard
+                    .general
+                    .string,
+            !string.isEmpty
         else {
 
             showToast(
@@ -1521,233 +1823,95 @@ struct TerminalView: View {
             return
         }
 
-        // 插入当前光标位置，
-        // 不再无脑 append 到末尾。
         editorBridge.insert(
-            pasteString
+            string
         )
 
         showToast(
-            "已粘贴到光标位置"
+            "已粘贴"
         )
     }
 
-    // MARK: - 复制
+    // MARK: Execute
 
-    private func copyBlock(
-        _ text: String,
-        tip: String
-    ) {
+    private func executeCurrentInput() {
 
-        UIPasteboard.general.string =
-            text
+        let text =
+            inputCommand
 
-        showToast(
-            tip
-        )
-    }
+        guard !text.isEmpty else {
+            return
+        }
 
-    // MARK: - 输出渲染
+        // ----------------------------------------
+        // 当前命令正在运行：
+        //
+        // 这是交互输入。
+        //
+        // y
+        // n
+        // 1
+        // 2
+        // password
+        // q
+        //
+        // 全部直接进入当前 PTY。
+        // ----------------------------------------
 
-    @ViewBuilder
-    private func renderOutputLines(
-        _ fullText: String,
-        defaultColor: Color
-    ) -> some View {
+        if session.commandIsRunning {
 
-        let lines =
-            fullText.components(
-                separatedBy: "\n"
+            session.sendInteractiveInput(
+                text + "\n"
             )
 
-        VStack(
-            alignment: .leading,
-            spacing: 2
-        ) {
+        } else {
 
-            ForEach(
-                Array(
-                    lines.enumerated()
-                ),
-                id: \.offset
-            ) { _, line in
+            // ----------------------------------------
+            // 当前没有程序运行：
+            //
+            // 才是新 Shell 命令。
+            // ----------------------------------------
 
-                let trimmed =
-                    line.trimmingCharacters(
-                        in: .whitespaces
-                    )
+            let command =
+                text.trimmingCharacters(
+                    in:
+                        .whitespacesAndNewlines
+                )
 
-                let isPromptLine =
-                    trimmed.range(
-                        of:
-                            #"^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:[^\r\n]*[#$]$"#,
-                        options:
-                            .regularExpression
-                    ) != nil
-
-                let colonIndex =
-                    trimmed.firstIndex(
-                        of: ":"
-                    )
-
-                let hasKeyValue =
-                    !isPromptLine &&
-                    !trimmed.isEmpty &&
-                    colonIndex != nil
-
-                if hasKeyValue,
-                   let colonIndex = colonIndex {
-
-                    let key =
-                        String(
-                            trimmed[
-                                ..<colonIndex
-                            ]
-                        )
-                        .trimmingCharacters(
-                            in:
-                                .whitespacesAndNewlines
-                        )
-
-                    let value =
-                        String(
-                            trimmed[
-                                trimmed.index(
-                                    after:
-                                        colonIndex
-                                )...
-                            ]
-                        )
-                        .trimmingCharacters(
-                            in:
-                                .whitespacesAndNewlines
-                        )
-
-                    HStack(
-                        alignment:
-                            .center,
-                        spacing: 6
-                    ) {
-
-                        Text(line)
-                            .font(
-                                .system(
-                                    size: 13,
-                                    design:
-                                        .monospaced
-                                )
-                            )
-                            .foregroundColor(
-                                defaultColor
-                            )
-                            .textSelection(
-                                .enabled
-                            )
-
-                        Spacer(
-                            minLength: 3
-                        )
-
-                        Button {
-
-                            UIPasteboard.general.string =
-                                value
-
-                            showToast(
-                                "已复制 \(key) 的值"
-                            )
-
-                        } label: {
-
-                            HStack(
-                                spacing: 3
-                            ) {
-
-                                Image(
-                                    systemName:
-                                        "doc.on.doc"
-                                )
-
-                                Text(
-                                    "复制值"
-                                )
-                            }
-                            .font(
-                                .system(
-                                    size: 10,
-                                    weight:
-                                        .medium
-                                )
-                            )
-                            .foregroundColor(
-                                .cyan
-                            )
-                            .padding(
-                                .horizontal,
-                                5
-                            )
-                            .padding(
-                                .vertical,
-                                4
-                            )
-                            .background(
-                                Color(
-                                    white: 0.18
-                                )
-                            )
-                            .cornerRadius(4)
-                        }
-                    }
-
-                } else {
-
-                    Text(
-                        line.isEmpty
-                        ? " "
-                        : line
-                    )
-                    .font(
-                        .system(
-                            size: 13,
-                            design:
-                                .monospaced
-                        )
-                    )
-                    .foregroundColor(
-                        defaultColor
-                    )
-                    .textSelection(
-                        .enabled
-                    )
-                }
+            guard !command.isEmpty else {
+                return
             }
+
+            runCommand(
+                command
+            )
         }
+
+        inputCommand = ""
+
+        systemKeyboardEnabled =
+            false
+
+        editorBridge.textView?
+            .resignFirstResponder()
     }
 
-    // MARK: - 滚动
+    // MARK: Run Command
 
-    private func scrollToBottom(
-        proxy: ScrollViewProxy
+    private func runCommand(
+        _ command: String
     ) {
 
-        DispatchQueue.main.async {
-
-            withAnimation(
-                .easeOut(
-                    duration: 0.12
-                )
-            ) {
-
-                proxy.scrollTo(
-                    "BOTTOM_ANCHOR",
-                    anchor: .bottom
-                )
-            }
-        }
+        session.sendCommand(
+            command
+        )
     }
 
-    private func scrollToCurrentCommand(
-        proxy: ScrollViewProxy
+    // MARK: Scroll
+
+    private func scrollBottom(
+        _ proxy:
+            ScrollViewProxy
     ) {
 
         DispatchQueue.main.async {
@@ -1759,14 +1923,14 @@ struct TerminalView: View {
             ) {
 
                 proxy.scrollTo(
-                    "CURRENT_PROMPT",
+                    "BOTTOM",
                     anchor: .bottom
                 )
             }
         }
     }
 
-    // MARK: - SSH
+    // MARK: Connect
 
     private func connectToServer() {
 
@@ -1785,58 +1949,21 @@ struct TerminalView: View {
         session.connect()
     }
 
-    private func executeCurrentInput() {
-
-        let cmd =
-            inputCommand
-                .trimmingCharacters(
-                    in:
-                        .whitespacesAndNewlines
-                )
-
-        guard !cmd.isEmpty else {
-            return
-        }
-
-        runCommand(
-            cmd
-        )
-
-        inputCommand =
-            ""
-
-        // 执行后恢复成自定义小键盘模式
-        systemKeyboardEnabled =
-            false
-
-        editorBridge.textView?
-            .resignFirstResponder()
-    }
-
-    private func runCommand(
-        _ cmd: String
-    ) {
-
-        session.sendCommand(
-            cmd
-        )
-    }
-
-    // MARK: - Toast
+    // MARK: Toast
 
     private func showToast(
-        _ msg: String
+        _ message: String
     ) {
 
         withAnimation {
 
             copiedTip =
-                msg
+                message
         }
 
         DispatchQueue.main.asyncAfter(
             deadline:
-                .now() + 1.8
+                .now() + 1.6
         ) {
 
             withAnimation {
@@ -1847,7 +1974,7 @@ struct TerminalView: View {
         }
     }
 
-    // MARK: - 快捷命令
+    // MARK: Quick Commands
 
     private func loadQuickCommands() {
 
@@ -1863,12 +1990,12 @@ struct TerminalView: View {
                     data
             ) {
 
-            self.quickCommands =
+            quickCommands =
                 decoded
 
         } else {
 
-            self.quickCommands = [
+            quickCommands = [
 
                 QuickCmd(
                     name:
@@ -1879,28 +2006,28 @@ struct TerminalView: View {
 
                 QuickCmd(
                     name:
-                        "面板管理 (x-ui)",
+                        "面板管理",
                     cmd:
                         "x-ui"
                 ),
 
                 QuickCmd(
                     name:
-                        "查看文件 (ls)",
+                        "查看文件",
                     cmd:
                         "ls -la"
                 ),
 
                 QuickCmd(
                     name:
-                        "磁盘空间 (df)",
+                        "磁盘空间",
                     cmd:
                         "df -h"
                 ),
 
                 QuickCmd(
                     name:
-                        "系统信息 (uname)",
+                        "系统信息",
                     cmd:
                         "uname -a"
                 )
@@ -1913,21 +2040,19 @@ struct TerminalView: View {
     private func addQuickCmd() {
 
         let name =
-            newCmdName
-                .trimmingCharacters(
-                    in:
-                        .whitespaces
-                )
+            newCmdName.trimmingCharacters(
+                in:
+                    .whitespaces
+            )
 
-        let cmd =
-            newCmdContent
-                .trimmingCharacters(
-                    in:
-                        .whitespaces
-                )
+        let command =
+            newCmdContent.trimmingCharacters(
+                in:
+                    .whitespaces
+            )
 
         guard !name.isEmpty,
-              !cmd.isEmpty
+              !command.isEmpty
         else {
             return
         }
@@ -1937,17 +2062,15 @@ struct TerminalView: View {
                 name:
                     name,
                 cmd:
-                    cmd
+                    command
             )
         )
 
         saveQuickCommands()
 
-        newCmdName =
-            ""
+        newCmdName = ""
 
-        newCmdContent =
-            ""
+        newCmdContent = ""
     }
 
     private func deleteQuickCmd(
@@ -1955,9 +2078,7 @@ struct TerminalView: View {
     ) {
 
         quickCommands.removeAll {
-
-            $0.id ==
-                item.id
+            $0.id == item.id
         }
 
         saveQuickCommands()
@@ -1965,16 +2086,112 @@ struct TerminalView: View {
 
     private func saveQuickCommands() {
 
-        if let encoded =
-            try? JSONEncoder().encode(
-                quickCommands
-            ) {
+        guard let data =
+                try? JSONEncoder().encode(
+                    quickCommands
+                )
+        else {
+            return
+        }
 
-            UserDefaults.standard.set(
-                encoded,
-                forKey:
-                    storageKey
+        UserDefaults.standard.set(
+            data,
+            forKey:
+                storageKey
+        )
+    }
+
+    // MARK: Add Command Sheet
+
+    private var addCommandSheet:
+        some View {
+
+        NavigationView {
+
+            Form {
+
+                Section(
+                    header:
+                        Text(
+                            "快捷命令"
+                        )
+                ) {
+
+                    TextField(
+                        "名称，例如：3x-ui",
+                        text:
+                            $newCmdName
+                    )
+
+                    TextField(
+                        "命令，例如：x-ui",
+                        text:
+                            $newCmdContent
+                    )
+                    .autocapitalization(
+                        .none
+                    )
+                    .disableAutocorrection(
+                        true
+                    )
+                }
+            }
+
+            .navigationTitle(
+                "添加快捷键"
             )
+
+            .navigationBarTitleDisplayMode(
+                .inline
+            )
+
+            .toolbar {
+
+                ToolbarItem(
+                    placement:
+                        .cancellationAction
+                ) {
+
+                    Button(
+                        "取消"
+                    ) {
+
+                        showingAddSheet =
+                            false
+                    }
+                }
+
+                ToolbarItem(
+                    placement:
+                        .confirmationAction
+                ) {
+
+                    Button(
+                        "保存"
+                    ) {
+
+                        addQuickCmd()
+
+                        showingAddSheet =
+                            false
+                    }
+                    .disabled(
+                        newCmdName
+                            .trimmingCharacters(
+                                in:
+                                    .whitespaces
+                            )
+                            .isEmpty
+                        ||
+                        newCmdContent
+                            .trimmingCharacters(
+                                in:
+                                    .whitespaces
+                            )
+                            .isEmpty
+                    )
+                }
+            }
         }
     }
 }

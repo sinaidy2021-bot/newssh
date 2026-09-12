@@ -1,5 +1,6 @@
 import Foundation
 import Citadel
+import NIOCore
 
 public struct CommandHistoryItem: Identifiable {
     public let id = UUID()
@@ -17,6 +18,7 @@ class SSHSession: ObservableObject {
     @Published var history: [CommandHistoryItem] = []
     
     private var client: SSHClient?
+    private var shellWriter: NIOAsyncChannelWriter<ByteBuffer>?
     
     var host: String = ""
     var port: Int = 22
@@ -52,11 +54,41 @@ class SSHSession: ObservableObject {
                     reconnect: .never
                 )
                 
+                // 1. 获取欢迎内核信息 (单次命令)
+                let bannerOutput = try await client.executeCommand("uname -a")
+                let bannerResult = String(buffer: bannerOutput)
+                let cleanedBanner = self.cleanANSI(bannerResult).trimmingCharacters(in: .whitespacesAndNewlines)
+                
+                // 2. 建立交互式 Shell (PTY流)
+                let shell = try await client.executeShell(term: "xterm-256color")
+                
                 await MainActor.run {
                     self.client = client
+                    self.shellWriter = shell.writer
                     self.isConnected = true
-                    self.history.append(CommandHistoryItem(command: "system", output: "连接成功！"))
+                    self.history.append(CommandHistoryItem(command: "system", output: cleanedBanner))
                 }
+                
+                // 3. 持续监听交互输出（完美支持 k 菜单动态渲染）
+                Task {
+                    do {
+                        for try await var buffer in shell.inbound {
+                            if let str = buffer.readString(length: buffer.readableBytes) {
+                                let cleaned = self.cleanANSI(str)
+                                await MainActor.run {
+                                    if let lastIndex = self.history.indices.last {
+                                        self.history[lastIndex].output += cleaned
+                                    } else {
+                                        self.history.append(CommandHistoryItem(command: "output", output: cleaned))
+                                    }
+                                }
+                            }
+                        }
+                    } catch {
+                        // 忽略流关闭异常
+                    }
+                }
+                
             } catch {
                 await MainActor.run {
                     self.history.append(CommandHistoryItem(command: "system", output: "连接失败: \(error.localizedDescription)"))
@@ -74,27 +106,33 @@ class SSHSession: ObservableObject {
         let cmdToSend = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cmdToSend.isEmpty else { return }
 
-        let index = history.count
         DispatchQueue.main.async {
-            self.history.append(CommandHistoryItem(command: cmdToSend, output: "执行中..."))
+            self.history.append(CommandHistoryItem(command: cmdToSend, output: ""))
         }
 
         Task {
             do {
-                let output = try await client.executeCommand("export TERM=xterm-256color; " + cmdToSend)
-                let result = String(buffer: output)
-                let cleaned = cleanANSI(result)
-                let finalOutput = cleaned.isEmpty ? "(命令已执行，无输出)" : cleaned
-                
-                await MainActor.run {
-                    if self.history.indices.contains(index) {
-                        self.history[index] = CommandHistoryItem(command: cmdToSend, output: finalOutput)
+                if var writer = self.shellWriter {
+                    // 彻底修复 allocator 报错问题，使用标准 ByteBufferAllocator
+                    let allocator = ByteBufferAllocator()
+                    var buffer = allocator.buffer(capacity: cmdToSend.utf8.count + 1)
+                    buffer.writeString(cmdToSend + "\n")
+                    try await writer.write(buffer)
+                } else {
+                    // 降级保护方案
+                    let output = try await client.executeCommand("export TERM=xterm-256color; " + cmdToSend)
+                    let result = String(buffer: output)
+                    let cleaned = self.cleanANSI(result)
+                    await MainActor.run {
+                        if let lastIndex = self.history.indices.last {
+                            self.history[lastIndex].output = cleaned.isEmpty ? "(已执行，无输出)" : cleaned
+                        }
                     }
                 }
             } catch {
                 await MainActor.run {
-                    if self.history.indices.contains(index) {
-                        self.history[index] = CommandHistoryItem(command: cmdToSend, output: "执行出错: \(error.localizedDescription)")
+                    if let lastIndex = self.history.indices.last {
+                        self.history[lastIndex].output = "发送出错: \(error.localizedDescription)"
                     }
                 }
             }
@@ -106,6 +144,7 @@ class SSHSession: ObservableObject {
             try? await self.client?.close()
             await MainActor.run {
                 self.client = nil
+                self.shellWriter = nil
                 self.isConnected = false
                 self.history.append(CommandHistoryItem(command: "system", output: "已断开连接"))
             }

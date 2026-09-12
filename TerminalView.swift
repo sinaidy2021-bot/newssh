@@ -1,19 +1,19 @@
 import SwiftUI
 
-// 快捷命令结构体（带中文说明）
+// 中文快捷命令结构
 struct QuickCmd: Identifiable {
     let id = UUID()
-    let name: String   // 中文标签
-    let cmd: String    // 实际命令
+    let name: String
+    let cmd: String
 }
 
 struct TerminalView: View {
     let serverName: String
-    @StateObject private var session = SSHSession()
+    @ObservedObject var session: SSHSession
     @State private var inputCommand: String = ""
     @FocusState private var isInputFocused: Bool
-    
-    // 带中文说明的常用快捷键列表
+
+    // 中文快捷指令栏
     let quickCommands: [QuickCmd] = [
         QuickCmd(name: "查看文件 (ls)", cmd: "ls -la"),
         QuickCmd(name: "磁盘空间 (df)", cmd: "df -h"),
@@ -27,7 +27,7 @@ struct TerminalView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 顶部带中文说明的横向滚动快捷栏
+            // 顶部快捷命令栏
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(quickCommands) { item in
@@ -49,34 +49,40 @@ struct TerminalView: View {
             }
             .background(Color(.systemBackground))
 
-            // 终端黑色输出窗口
+            // 黑色终端显示区域
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(session.terminalOutput.isEmpty ? "Connecting to \(serverName)...\n" : session.terminalOutput)
+                        Text(session.terminalOutput.isEmpty ? "正在连接到服务器...\n" : session.terminalOutput)
                             .font(.system(size: 13, design: .monospaced))
                             .foregroundColor(.green)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .id("BOTTOM")
+                            .textSelection(.enabled)
+                        
+                        // 底部锚点：确保永远滚到最底下
+                        Color.clear
+                            .frame(height: 1)
+                            .id("BOTTOM_ID")
                     }
                     .padding()
                     .frame(maxWidth: .infinity, minHeight: 450, alignment: .topLeading)
                 }
                 .background(Color.black)
-                // 1. 点空白区域收起键盘
                 .onTapGesture {
                     isInputFocused = false
                 }
-                // 2. 屏幕滑动时交互收起键盘
                 .scrollDismissesKeyboard(.interactively)
-                .onChange(of: session.terminalOutput) { _ in
-                    withAnimation {
-                        proxy.scrollTo("BOTTOM", anchor: .bottom)
+                // 收到新输出时立即强制滚到最底端
+                .onChange(of: session.terminalOutput) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        withAnimation {
+                            proxy.scrollTo("BOTTOM_ID", anchor: .bottom)
+                        }
                     }
                 }
             }
 
-            // 底部命令行输入框
+            // 底部输入栏
             HStack(spacing: 8) {
                 TextField("输入 Linux 命令...", text: $inputCommand)
                     .focused($isInputFocused)
@@ -119,12 +125,6 @@ struct TerminalView: View {
                 }
             }
         }
-        .onAppear {
-            session.connect()
-        }
-        .onDisappear {
-            session.disconnect()
-        }
     }
 
     private func executeCurrentInput() {
@@ -135,8 +135,16 @@ struct TerminalView: View {
     }
 
     private func runCommand(_ cmd: String) {
-        // 执行命令时自动隐藏键盘，避免遮挡输出
         isInputFocused = false
-        session.sendCommand(cmd)
+        
+        // 1. 本地立即回显输入的命令提示符
+        if !session.terminalOutput.hasSuffix("\n") && !session.terminalOutput.isEmpty {
+            session.terminalOutput += "\n"
+        }
+        session.terminalOutput += "$ \(cmd)\n"
+        
+        // 2. 确保命令末尾带回车换行符，否则 Linux 不会执行
+        let finalCmd = cmd.hasSuffix("\n") ? cmd : "\(cmd)\n"
+        session.sendCommand(finalCmd)
     }
 }

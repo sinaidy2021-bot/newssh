@@ -1,362 +1,385 @@
 import Foundation
 import UIKit
+import Combine
 import Citadel
 import NIOCore
 import NIOSSH
 
+public struct CommandHistoryItem: Identifiable {
+    public let id = UUID()
+    public let command: String
+    public var output: String
+
+    public init(command: String, output: String) {
+        self.command = command
+        self.output = output
+    }
+}
+
 @MainActor
 final class SSHSession: ObservableObject {
-    @Published private(set) var isConnected = false
-    @Published private(set) var terminalText = ""
-    @Published private(set) var outputRevision = 0
-    @Published private(set) var statusText = "未连接"
+    @Published var isConnected: Bool = false
+    @Published var history: [CommandHistoryItem] = []
 
     private var client: SSHClient?
     private var activeWriter: TTYStdinWriter?
-    private var connectionTask: Task<Void, Never>?
-    private var flushTask: Task<Void, Never>?
-    private var pendingOutput = ""
+
+    var host: String = ""
+    var port: Int = 22
+    var username: String = "root"
+    var password: String = ""
+
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
-    private var disconnectRequested = false
-    private var suppressInitialBanner = true
-    private var initialBannerBuffer = ""
+    private var keepAliveTimer: Timer?
 
-    let host: String
-    let port: Int
-    let username: String
-    let password: String
+    // MARK: - 输出批处理
+    // 大量输出时不要每个 SSH chunk 都触发 SwiftUI 重绘。
+    private var pendingOutput = ""
+    private var flushTask: Task<Void, Never>?
 
-    private let maxStoredLines = 12000
-
-    init(host: String, port: Int, username: String, password: String) {
-        self.host = host
-        self.port = port
-        self.username = username
-        self.password = password
+    // MARK: - 多命令队列
+    // 每条命令单独保存，输出严格按发送顺序归属。
+    private struct PendingCommand {
+        let id: UUID
+        let command: String
     }
 
-    deinit {
-        connectionTask?.cancel()
-        flushTask?.cancel()
-        if backgroundTask != .invalid {
-            UIApplication.shared.endBackgroundTask(backgroundTask)
-        }
+    private var pendingCommands: [PendingCommand] = []
+
+    // 终端中用 shell marker 判断一条命令何时结束。
+    private let commandEndMarker = "__MYSSH_DONE_7F3A9C__"
+
+    // 防止单条命令超大输出拖垮 iPhone。
+    private let maxOutputCharactersPerCommand = 300_000
+
+    // 防止长期使用后历史无限增长。
+    private let maxHistoryItems = 120
+
+    // MARK: - ANSI 清理
+    private func cleanANSI(_ raw: String) -> String {
+        var text = raw
+
+        // OSC：ESC ] ... BEL / ESC \
+        text = text.replacingOccurrences(
+            of: #"\x1B\][^\x07\x1B]*(\x07|\x1B\\)?"#,
+            with: "",
+            options: .regularExpression
+        )
+
+        // CSI：ESC [ 参数/中间字节 最终字节
+        text = text.replacingOccurrences(
+            of: #"\x1B\[[0-9;?]*[ -/]*[@-~]"#,
+            with: "",
+            options: .regularExpression
+        )
+
+        // 其他常见 ESC 双字符序列
+        text = text.replacingOccurrences(
+            of: #"\x1B[@-Z\\-_]"#,
+            with: "",
+            options: .regularExpression
+        )
+
+        text = text.replacingOccurrences(of: "\u{001B}", with: "")
+        text = text.replacingOccurrences(of: "\u{009B}", with: "")
+
+        // PTY 常见 CRLF -> LF；裸 CR 不显示，避免产生大量覆盖式垃圾。
+        text = text.replacingOccurrences(of: "\r\n", with: "\n")
+        text = text.replacingOccurrences(of: "\r", with: "")
+
+        return text
     }
 
+    // MARK: - 连接
     func connect() {
-        guard !isConnected, connectionTask == nil else { return }
-        disconnectRequested = false
-        suppressInitialBanner = true
-        initialBannerBuffer = ""
-        terminalText = ""
+        guard !isConnected else { return }
+
+        flushTask?.cancel()
+        flushTask = nil
         pendingOutput = ""
-        statusText = "正在连接…"
+        pendingCommands.removeAll()
 
-        let host = self.host
-        let port = self.port
-        let username = self.username
-        let password = self.password
-
-        connectionTask = Task { [weak self] in
-            guard let self else { return }
+        Task {
             do {
                 let client = try await SSHClient.connect(
-                    host: host,
-                    port: port,
+                    host: self.host,
+                    port: .init(integerLiteral: self.port),
                     authenticationMethod: .passwordBased(
-                        username: username,
-                        password: password
+                        username: self.username,
+                        password: self.password
                     ),
                     hostKeyValidator: .acceptAnything(),
                     reconnect: .never
                 )
 
-                try Task.checkCancellation()
                 self.client = client
-                try await self.runPTY(client: client)
-            } catch is CancellationError {
-                if !self.disconnectRequested {
-                    self.finishConnection(message: "连接已取消")
-                }
-            } catch {
-                self.finishConnection(message: "连接失败：\(error.localizedDescription)")
-            }
-            self.connectionTask = nil
-        }
-    }
+                self.isConnected = true
+                self.startKeepAlive()
 
-    private func runPTY(client: SSHClient) async throws {
-        let pty = SSHChannelRequestEvent.PseudoTerminalRequest(
-            wantReply: true,
-            term: "xterm-256color",
-            terminalCharacterWidth: 100,
-            terminalRowHeight: 40,
-            terminalPixelWidth: 0,
-            terminalPixelHeight: 0,
-            terminalModes: .init([.ECHO: 1])
-        )
-
-        try await client.withPTY(pty) { [weak self] stream, writer in
-            guard let self else { return }
-
-            self.activeWriter = writer
-            self.isConnected = true
-            self.statusText = "已连接"
-            self.suppressInitialBanner = true
-            self.initialBannerBuffer = ""
-            self.terminalText = ""
-            self.pendingOutput = ""
-
-            do {
-                try await self.writeRaw(
-                    "export PAGER=cat SYSTEMD_PAGER=cat GIT_PAGER=cat MANPAGER=cat TERM=xterm-256color\n"
+                let ptyReq = SSHChannelRequestEvent.PseudoTerminalRequest(
+                    wantReply: true,
+                    term: "xterm-256color",
+                    terminalCharacterWidth: 100,
+                    terminalRowHeight: 40,
+                    terminalPixelWidth: 0,
+                    terminalPixelHeight: 0,
+                    terminalModes: .init([.ECHO: 0])
                 )
-            } catch {
-                // 环境变量设置失败不影响交互终端。
-            }
 
-            do {
-                for try await event in stream {
-                    try Task.checkCancellation()
+                try await client.withPTY(ptyReq) { [weak self] stream, writer in
+                    guard let self = self else { return }
 
-                    let buffer: ByteBuffer
-                    switch event {
-                    case .stdout(let value):
-                        buffer = value
-                    case .stderr(let value):
-                        buffer = value
+                    self.activeWriter = writer
+
+                    for try await event in stream {
+                        let buffer: ByteBuffer
+
+                        switch event {
+                        case .stdout(let b):
+                            buffer = b
+                        case .stderr(let b):
+                            buffer = b
+                        }
+
+                        if let text = buffer.getString(
+                            at: buffer.readerIndex,
+                            length: buffer.readableBytes
+                        ) {
+                            self.receiveOutput(text)
+                        }
                     }
-
-                    guard let text = buffer.getString(
-                        at: buffer.readerIndex,
-                        length: buffer.readableBytes
-                    ), !text.isEmpty else {
-                        continue
-                    }
-
-                    self.receive(text)
                 }
-            } catch is CancellationError {
-                // 正常断开。
+
+                if self.isConnected {
+                    self.finishConnection(message: nil)
+                }
             } catch {
-                if !self.disconnectRequested {
-                    self.finishConnection(message: "SSH 数据流结束：\(error.localizedDescription)")
-                }
-            }
-
-            self.activeWriter = nil
-            self.client = nil
-            self.isConnected = false
-
-            if !self.disconnectRequested {
-                self.statusText = "连接已断开"
+                self.finishConnection(
+                    message: "连接断开或异常: \(error.localizedDescription)"
+                )
             }
         }
     }
 
-    private func finishConnection(message: String) {
-        activeWriter = nil
-        client = nil
-        isConnected = false
-        statusText = message
-        appendLocalMessage("\n[\(message)]\n")
-    }
-
-    private func cleanANSI(_ raw: String) -> String {
-        var text = raw
-
-        // OSC / window-title sequences
-        text = text.replacingOccurrences(
-            of: #"\u{1B}\][^\u{07}\u{1B}]*(\u{07}|\u{1B}\\)?"#,
-            with: "",
-            options: .regularExpression
-        )
-
-        // CSI sequences, including cursor movement and screen clearing.
-        text = text.replacingOccurrences(
-            of: #"\u{1B}\[[0-9;?]*[ -/]*[@-~]"#,
-            with: "",
-            options: .regularExpression
-        )
-
-        // Remaining two-byte ESC sequences.
-        text = text.replacingOccurrences(
-            of: #"\u{1B}[@-Z\\-_]"#,
-            with: "",
-            options: .regularExpression
-        )
-
-        text = text.replacingOccurrences(of: "\u{009B}", with: "")
-        text = text.replacingOccurrences(of: "\r\n", with: "\n")
-        text = text.replacingOccurrences(of: "\r", with: "\n")
-
-        // Remove other non-printing C0 controls, but keep tab/newline.
-        text = String(text.unicodeScalars.filter { scalar in
-            scalar.value == 9 || scalar.value == 10 || scalar.value >= 32
-        })
-
-        return text
-    }
-
-    private func receive(_ raw: String) {
-        let cleaned = cleanANSI(raw)
+    // MARK: - 输出接收/批处理
+    private func receiveOutput(_ rawText: String) {
+        let cleaned = cleanANSI(rawText)
         guard !cleaned.isEmpty else { return }
 
-        // SSH 登录后服务器可能先发送 Ubuntu MOTD、Last login 等欢迎信息。
-        // 首次连接期间不把这些内容显示出来，只等待真正的 shell 提示符。
-        if suppressInitialBanner {
-            initialBannerBuffer += cleaned
+        pendingOutput.append(cleaned)
 
-            // 防止异常服务器无限堆积登录横幅。
-            if initialBannerBuffer.count > 16000 {
-                initialBannerBuffer = String(initialBannerBuffer.suffix(16000))
-            }
+        // 约 80ms 合并一次 UI 更新。
+        if flushTask == nil {
+            flushTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 80_000_000)
 
-            if let prompt = extractInitialPrompt(from: initialBannerBuffer) {
-                suppressInitialBanner = false
-                initialBannerBuffer = ""
-                pendingOutput = ""
-                terminalText = prompt
-                if !prompt.hasSuffix("\n") {
-                    terminalText += "\n"
+                guard !Task.isCancelled else { return }
+
+                await MainActor.run {
+                    self?.flushOutput()
                 }
-                outputRevision &+= 1
-            }
-            return
-        }
-
-        pendingOutput += cleaned
-
-        guard flushTask == nil else { return }
-
-        flushTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 50_000_000)
-            guard !Task.isCancelled, let self else { return }
-            self.flushPendingOutput()
-        }
-    }
-
-    private func flushPendingOutput() {
-        flushTask = nil
-        guard !pendingOutput.isEmpty else { return }
-
-        terminalText += pendingOutput
-        pendingOutput = ""
-        trimTerminalIfNeeded()
-        outputRevision &+= 1
-    }
-
-    private func extractInitialPrompt(from text: String) -> String? {
-        let lines = text.components(separatedBy: "\n")
-        guard !lines.isEmpty else { return nil }
-
-        for line in lines.reversed() {
-            let candidate = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !candidate.isEmpty else { continue }
-
-            // 常见 shell 提示符：root@host:~#、user@host:~$、% 或 >。
-            if candidate.range(
-                of: #"^[^\n]{1,240}(?:[#%$>])$"#,
-                options: .regularExpression
-            ) != nil {
-                return candidate
             }
         }
 
-        return nil
-    }
-
-    private func appendLocalMessage(_ text: String) {
-        terminalText += text
-        trimTerminalIfNeeded()
-        outputRevision &+= 1
-    }
-
-    private func trimTerminalIfNeeded() {
-        let lines = terminalText.split(
-            separator: "\n",
-            omittingEmptySubsequences: false
-        )
-
-        guard lines.count > maxStoredLines else { return }
-
-        terminalText = lines.suffix(maxStoredLines).joined(separator: "\n")
-    }
-
-    func sendCommand(_ command: String) {
-        let value = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { return }
-        guard isConnected else {
-            appendLocalMessage("\n[未连接，无法执行：\(value)]\n")
-            return
-        }
-        sendRaw(value + "\n")
-    }
-
-    func sendKey(_ value: String) {
-        guard isConnected else { return }
-        sendRaw(value)
-    }
-
-    func sendCtrlC() { sendKey("\u{03}") }
-    func sendEscape() { sendKey("\u{1B}") }
-    func sendBackspace() { sendKey("\u{7F}") }
-    func sendSpace() { sendKey(" ") }
-
-    private func sendRaw(_ value: String) {
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await self.writeRaw(value)
-            } catch {
-                self.appendLocalMessage("\n[写入失败：\(error.localizedDescription)]\n")
-            }
+        // 极端大输出时不要让待处理缓冲无限涨。
+        if pendingOutput.count >= 500_000 {
+            flushOutput()
         }
     }
 
-    private func writeRaw(_ value: String) async throws {
-        guard let writer = activeWriter else {
-            throw NSError(
-                domain: "MySSH",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "SSH 写入通道不存在"]
-            )
-        }
-
-        var buffer = ByteBufferAllocator().buffer(capacity: value.utf8.count)
-        buffer.writeString(value)
-        try await writer.write(buffer)
-    }
-
-    func disconnect() {
-        guard isConnected || connectionTask != nil else { return }
-
-        disconnectRequested = true
-        endBackgroundTask()
+    private func flushOutput() {
         flushTask?.cancel()
         flushTask = nil
+
+        guard !pendingOutput.isEmpty else { return }
+
+        let text = pendingOutput
         pendingOutput = ""
 
-        connectionTask?.cancel()
-        connectionTask = nil
+        processOutput(text)
+    }
 
-        let oldClient = client
-        client = nil
-        activeWriter = nil
-        isConnected = false
-        statusText = "已断开"
+    private func processOutput(_ text: String) {
+        var remaining = text
 
-        if let oldClient {
-            Task {
-                try? await oldClient.close()
+        while let markerRange = remaining.range(of: commandEndMarker) {
+            let beforeMarker = String(remaining[..<markerRange.lowerBound])
+
+            if !beforeMarker.isEmpty {
+                appendOutputToCurrentCommand(beforeMarker)
+            }
+
+            completeCurrentCommand()
+            remaining = String(remaining[markerRange.upperBound...])
+        }
+
+        if !remaining.isEmpty {
+            appendOutputToCurrentCommand(remaining)
+        }
+    }
+
+    private func appendOutputToCurrentCommand(_ text: String) {
+        guard !text.isEmpty else { return }
+        guard let pending = pendingCommands.first else {
+            // 未发送命令前的 MOTD / 登录信息不塞进终端历史。
+            return
+        }
+
+        guard let index = history.firstIndex(where: { $0.id == pending.id }) else {
+            return
+        }
+
+        var item = history[index]
+        var output = item.output
+
+        if output.isEmpty {
+            output = text
+        } else {
+            output += text
+        }
+
+        // PTY 若返回命令回显，去掉一次。
+        if output.hasPrefix(pending.command + "\n") {
+            output = String(output.dropFirst(pending.command.count + 1))
+        } else if output.hasPrefix(pending.command) {
+            output = String(output.dropFirst(pending.command.count))
+        }
+
+        if output.count > maxOutputCharactersPerCommand {
+            output = String(output.prefix(maxOutputCharactersPerCommand))
+            if !output.hasSuffix("\n") {
+                output += "\n"
+            }
+            output += "[输出过长，已限制显示]"
+        }
+
+        item.output = output
+        history[index] = item
+    }
+
+    private func completeCurrentCommand() {
+        guard !pendingCommands.isEmpty else { return }
+        pendingCommands.removeFirst()
+    }
+
+    private func appendHistory(_ item: CommandHistoryItem) {
+        history.append(item)
+
+        if history.count > maxHistoryItems {
+            history.removeFirst(history.count - maxHistoryItems)
+        }
+    }
+
+    // MARK: - 发送命令
+    func sendCommand(_ command: String) {
+        guard isConnected else { return }
+
+        let cmd = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cmd.isEmpty else { return }
+        guard let writer = activeWriter else { return }
+
+        let id = UUID()
+
+        appendHistory(
+            CommandHistoryItem(command: cmd, output: "")
+        )
+
+        if let actualID = history.last?.id {
+            pendingCommands.append(
+                PendingCommand(id: actualID, command: cmd)
+            )
+        } else {
+            return
+        }
+
+        Task {
+            do {
+                var buffer = ByteBufferAllocator().buffer(
+                    capacity: cmd.utf8.count + commandEndMarker.utf8.count + 64
+                )
+
+                // 每条命令结束后输出唯一 marker。
+                // marker 本身不会进入历史显示，只用于给客户端做命令边界。
+                buffer.writeString(
+                    "\(cmd)\nprintf '\\n\(commandEndMarker)\\n'\n"
+                )
+
+                try await writer.write(buffer)
+            } catch {
+                self.handleWriteFailure(id: id, error: error)
             }
         }
     }
 
+    private func handleWriteFailure(id: UUID, error: Error) {
+        if let index = history.firstIndex(where: { $0.id == id }) {
+            history[index].output = "写入失败: \(error.localizedDescription)"
+        }
+
+        pendingCommands.removeAll { $0.id == id }
+    }
+
+    // MARK: - 控制键
+    // Ctrl+C / ESC / 空格 / 退格等直接写 PTY，不创建命令历史。
+    func sendControl(_ value: String) {
+        guard isConnected, let writer = activeWriter else { return }
+
+        Task {
+            var buffer = ByteBufferAllocator().buffer(
+                capacity: value.utf8.count
+            )
+            buffer.writeString(value)
+            try? await writer.write(buffer)
+        }
+    }
+
+    func sendCtrlC() {
+        sendControl("\u{03}")
+    }
+
+    func sendEscape() {
+        sendControl("\u{1B}")
+    }
+
+    func sendSpace() {
+        sendControl(" ")
+    }
+
+    func sendBackspace() {
+        sendControl("\u{7F}")
+    }
+
+    // MARK: - Keep Alive
+    private func startKeepAlive() {
+        stopKeepAlive()
+
+        keepAliveTimer = Timer.scheduledTimer(
+            withTimeInterval: 25.0,
+            repeats: true
+        ) { [weak self] _ in
+            guard let self = self,
+                  self.isConnected,
+                  let writer = self.activeWriter else { return }
+
+            Task {
+                var buffer = ByteBufferAllocator().buffer(capacity: 1)
+                buffer.writeString("")
+                try? await writer.write(buffer)
+            }
+        }
+    }
+
+    private func stopKeepAlive() {
+        keepAliveTimer?.invalidate()
+        keepAliveTimer = nil
+    }
+
+    // MARK: - App 生命周期
     func appDidEnterBackground() {
-        guard isConnected, backgroundTask == .invalid else { return }
+        guard isConnected else { return }
+
         backgroundTask = UIApplication.shared.beginBackgroundTask(
-            withName: "SSHSession"
+            withName: "SSHKeepAlive"
         ) { [weak self] in
             self?.endBackgroundTask()
         }
@@ -371,5 +394,42 @@ final class SSHSession: ObservableObject {
             UIApplication.shared.endBackgroundTask(backgroundTask)
             backgroundTask = .invalid
         }
+    }
+
+    // MARK: - 连接结束
+    private func finishConnection(message: String?) {
+        flushOutput()
+
+        isConnected = false
+        activeWriter = nil
+        stopKeepAlive()
+        pendingCommands.removeAll()
+
+        if let message, !message.isEmpty {
+            appendHistory(
+                CommandHistoryItem(command: "system", output: message)
+            )
+        }
+    }
+
+    func disconnect() {
+        flushOutput()
+        stopKeepAlive()
+        endBackgroundTask()
+
+        let clientToClose = client
+        client = nil
+        activeWriter = nil
+        isConnected = false
+        pendingCommands.removeAll()
+        pendingOutput = ""
+
+        Task {
+            try? await clientToClose?.close()
+        }
+
+        appendHistory(
+            CommandHistoryItem(command: "system", output: "已主动断开连接")
+        )
     }
 }

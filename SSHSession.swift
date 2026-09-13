@@ -1,96 +1,65 @@
 import Foundation
 import Citadel
-import NIOCore
-import NIOSSH
+import Combine
 
-struct CommandHistoryItem: Identifiable {
-    let id = UUID()
-    let command: String
+struct HistoryItem: Identifiable {
+    var id = UUID()
+    var command: String
     var output: String
 }
 
-@MainActor
-final class SSHSession: ObservableObject {
+class SSHSession: ObservableObject {
+    @Published var history: [HistoryItem] = []
     @Published var isConnected = false
-    @Published var history: [CommandHistoryItem] = []
-    private var client: SSHClient?
-    private var activeWriter: TTYStdinWriter?
     var host = ""
-    var username = "root"
+    var username = ""
     var password = ""
+    private var client: SSHClient?
+    private var shell: SSHChannel?
 
     func connect() {
         Task {
             do {
-                let client = try await SSHClient.connect(
-                    host: host,
-                    port: 22,
-                    authenticationMethod:.passwordBased(username: username, password: password),
-                    hostKeyValidator:.acceptAnything(),
-                    reconnect:.never
-                )
+                let client = try await SSHClient.connect(host: host, username: username, authMethod: SSHAuthMethod.password(password), hostValidator:.acceptAnything())
+                DispatchQueue.main.async { self.isConnected = true }
                 self.client = client
-                self.isConnected = true
-                let pty = SSHChannelRequestEvent.PseudoTerminalRequest(wantReply: true, term: "xterm", terminalCharacterWidth: 80, terminalRowHeight: 40, terminalPixelWidth: 0, terminalPixelHeight: 0, terminalModes:.init([.ECHO: 0]))
-                try await client.withPTY(pty) { stream, writer in
-                    self.activeWriter = writer
-                    for try await event in stream {
-                        let buf: ByteBuffer
-                        switch event {
-                        case.stdout(let b): buf = b
-                        case.stderr(let b): buf = b
-                        }
-                        if let s = buf.getString(at: buf.readerIndex, length: buf.readableBytes) {
-                            let clean = s.replacingOccurrences(of: "\r", with: "")
+                let shell = try await client.openShell()
+                self.shell = shell
+                for try await data in shell.outputs {
+                    if let text = String(data: data, encoding:.utf8) {
+                        DispatchQueue.main.async {
+                            let clean = text.trimmingCharacters(in:.whitespacesAndNewlines)
                             if!clean.isEmpty {
-                                if let idx = self.history.indices.last {
-                                    self.history[idx].output += clean
+                                if self.history.isEmpty {
+                                    self.history.append(HistoryItem(command: "连接成功", output: clean))
+                                } else {
+                                    self.history[self.history.count - 1].output += clean + "\n"
                                 }
                             }
                         }
                     }
                 }
-                self.isConnected = false
             } catch {
-                self.history.append(CommandHistoryItem(command: "system", output: "连接失败: \(error.localizedDescription)"))
-                self.isConnected = false
+                DispatchQueue.main.async {
+                    self.history.append(HistoryItem(command: "连接失败", output: "\(error)"))
+                }
             }
         }
     }
 
     func sendCommand(_ cmd: String) {
-        let item = CommandHistoryItem(command: cmd, output: "")
-        history.append(item)
-        let idx = history.count - 1
+        DispatchQueue.main.async {
+            self.history.append(HistoryItem(command: cmd, output: ""))
+        }
         Task {
-            do {
-                var buffer = ByteBufferAllocator().buffer(capacity: cmd.utf8.count + 2)
-                buffer.writeString(cmd + "\n")
-                try await self.activeWriter?.write(buffer)
-            } catch {
-                self.history[idx].output = "写入失败: \(error.localizedDescription)"
-            }
+            try? await shell?.write(cmd + "\n")
         }
     }
 
-    func sendCtrlC() {
-        Task {
-            var buffer = ByteBufferAllocator().buffer(capacity: 1)
-            buffer.writeString("\u{03}")
-            try? await self.activeWriter?.write(buffer)
-        }
-    }
-
-    func sendTab() {
-        Task {
-            var buffer = ByteBufferAllocator().buffer(capacity: 1)
-            buffer.writeString("\t")
-            try? await self.activeWriter?.write(buffer)
-        }
-    }
-
+    func sendCtrlC() { Task { try? await shell?.write(Data([0x03])) } }
+    func sendTab() { Task { try? await shell?.write(Data([0x09])) } }
     func disconnect() {
-        Task { try? await self.client?.close() }
-        isConnected = false
+        Task { try? await shell?.close(); try? await client?.close() }
+        DispatchQueue.main.async { self.isConnected = false }
     }
 }

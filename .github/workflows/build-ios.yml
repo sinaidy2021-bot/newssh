@@ -18,13 +18,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           ICON="AppIconSource.png"
           test -f "$ICON"
 
           rm -rf Assets.xcassets
           mkdir -p Assets.xcassets/AppIcon.appiconset
-
           cp "$ICON" Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png
 
           cat > Assets.xcassets/Contents.json <<'JSON'
@@ -57,7 +55,6 @@ jobs:
           HEIGHT=$(sips -g pixelHeight "$ICON" | awk '/pixelHeight/ {print $2}')
           test "$WIDTH" = "1024"
           test "$HEIGHT" = "1024"
-          echo "AppIcon verified: ${WIDTH}x${HEIGHT}"
 
       - name: Generate Xcode project
         run: xcodegen generate
@@ -70,14 +67,14 @@ jobs:
           test -f Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png
           test -f Assets.xcassets/AppIcon.appiconset/Contents.json
           test -f MySSH.xcodeproj/project.pbxproj
-          echo "All required build inputs are present."
 
       - name: Build unsigned iOS app
         shell: bash
         run: |
-          set -euo pipefail
+          set -o pipefail
           rm -rf build
           mkdir -p build
+
           xcodebuild \
             -project MySSH.xcodeproj \
             -scheme MySSH \
@@ -87,79 +84,107 @@ jobs:
             -archivePath build/MySSH.xcarchive \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            archive | tee build/xcodebuild.log
+            archive 2>&1 | tee build/xcodebuild.log
 
       - name: Verify archived app
         shell: bash
         run: |
           set -euo pipefail
           APP="build/MySSH.xcarchive/Products/Applications/MySSH.app"
-          test -d "$APP"
-          test -f "$APP/Info.plist"
 
-          EXECUTABLE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP/Info.plist")
-          test "$EXECUTABLE" = "MySSH"
-          test -f "$APP/$EXECUTABLE"
-          test -x "$APP/$EXECUTABLE"
+          test -d "$APP" || { echo "ROOT CAUSE: archive did not contain MySSH.app"; exit 1; }
+          test -f "$APP/Info.plist" || { echo "ROOT CAUSE: MySSH.app/Info.plist is missing"; exit 1; }
+
+          EXECUTABLE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP/Info.plist") || {
+            echo "ROOT CAUSE: CFBundleExecutable is missing from Info.plist"
+            exit 1
+          }
+
+          test "$EXECUTABLE" = "MySSH" || {
+            echo "ROOT CAUSE: CFBundleExecutable=$EXECUTABLE, expected MySSH"
+            exit 1
+          }
+
+          test -f "$APP/$EXECUTABLE" || {
+            echo "ROOT CAUSE: executable $EXECUTABLE is missing"
+            exit 1
+          }
+
+          test -x "$APP/$EXECUTABLE" || {
+            echo "ROOT CAUSE: executable $EXECUTABLE is not executable"
+            exit 1
+          }
 
           FILE_INFO=$(file "$APP/$EXECUTABLE")
           echo "$FILE_INFO"
-          echo "$FILE_INFO" | grep -q "Mach-O 64-bit arm64"
 
-          echo "Archive verified: $APP"
-          echo "CFBundleExecutable=$EXECUTABLE"
+          # macOS file output is:
+          # Mach-O 64-bit executable arm64
+          echo "$FILE_INFO" | grep -q "Mach-O 64-bit executable arm64" || {
+            echo "ROOT CAUSE: main executable is not a 64-bit arm64 Mach-O"
+            exit 1
+          }
 
-      - name: 捕获构建错误详情
-        if: ${{ failure() }}
-        shell: bash
-        run: |
-          set +e
-          LOG="build/xcodebuild.log"
-          OUT="build/build-error-details.txt"
-
-          {
-            echo "## 🔍 编译/归档错误详情"
-            echo ""
-
-            if [ -f "$LOG" ]; then
-              echo "### 关键错误"
-              echo '```text'
-              grep -n -E "error:|fatal error:|BUILD FAILED|Command .* failed|SwiftCompile|Ld " "$LOG" | tail -n 200 || true
-              echo '```'
-              echo ""
-              echo "### 最后 300 行原始日志"
-              echo '```text'
-              tail -n 300 "$LOG" || true
-              echo '```'
-            else
-              echo "⚠️ 未找到 $LOG"
-              echo "请查看 Build unsigned iOS app 步骤的原始输出。"
-            fi
-          } | tee "$OUT"
-
-      - name: Upload failure diagnostics
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: MySSH-build-error-details
-          path: |
-            build/xcodebuild.log
-            build/build-error-details.txt
-          if-no-files-found: warn
+          echo "Archive verified successfully."
 
       - name: Package unsigned IPA
         shell: bash
         run: |
           set -euo pipefail
+          APP="build/MySSH.xcarchive/Products/Applications/MySSH.app"
           rm -rf build/Payload build/MySSH-unsigned.ipa
           mkdir -p build/Payload
-          cp -R build/MySSH.xcarchive/Products/Applications/MySSH.app build/Payload/MySSH.app
+          cp -R "$APP" build/Payload/MySSH.app
           (cd build && zip -qry MySSH-unsigned.ipa Payload)
+          test -f build/MySSH-unsigned.ipa
 
       - name: Upload IPA and build log
+        if: ${{ success() }}
         uses: actions/upload-artifact@v4
         with:
           name: MySSH-unsigned-IPA
           path: |
             build/MySSH-unsigned.ipa
             build/xcodebuild.log
+
+      - name: 输出简洁失败诊断
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          set +e
+          echo "=============================="
+          echo "MySSH 构建失败：根因诊断"
+          echo "=============================="
+
+          if [ -f build/xcodebuild.log ]; then
+            echo ""
+            echo "【Xcode 真正错误】"
+            grep -n -E "error:|fatal error:|BUILD FAILED|Command .* failed" \
+              build/xcodebuild.log | tail -n 30 || echo "未发现 Xcode 编译错误；失败可能发生在归档验证或打包步骤。"
+          fi
+
+          echo ""
+          echo "【归档文件状态】"
+          if [ -d build/MySSH.xcarchive/Products/Applications/MySSH.app ]; then
+            APP="build/MySSH.xcarchive/Products/Applications/MySSH.app"
+            echo "MySSH.app: 存在"
+            if [ -f "$APP/Info.plist" ]; then
+              echo "Info.plist: 存在"
+              EXEC=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP/Info.plist" 2>/dev/null)
+              echo "CFBundleExecutable: ${EXEC:-缺失}"
+              if [ -n "$EXEC" ] && [ -f "$APP/$EXEC" ]; then
+                echo "主程序: 存在"
+                file "$APP/$EXEC"
+              else
+                echo "主程序: 缺失"
+              fi
+            else
+              echo "Info.plist: 缺失"
+            fi
+          else
+            echo "MySSH.app: 不存在"
+          fi
+
+          echo ""
+          echo "【建议】"
+          echo "以上只显示根因相关信息，不再输出几百行原始日志。"

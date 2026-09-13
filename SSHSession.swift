@@ -79,7 +79,17 @@ class SSHSession: ObservableObject {
                     await MainActor.run {
                         self?.activeWriter = writer
                     }
-                    
+
+                    // 连接建立后立刻关闭常见命令的自动分页（systemctl / journalctl / git / man 等），
+                    // 避免终端被 less 这类交互式分页器"吃掉"按键，导致后续命令全部失效。
+                    do {
+                        var buffer = ByteBufferAllocator().buffer(capacity: 128)
+                        buffer.writeString("export PAGER=cat SYSTEMD_PAGER=cat GIT_PAGER=cat MANPAGER=cat 2>/dev/null\n")
+                        try await writer.write(buffer)
+                    } catch {
+                        // 静默失败即可，不影响正常连接流程
+                    }
+
                     for try await event in stream {
                         let buffer: ByteBuffer
                         switch event {

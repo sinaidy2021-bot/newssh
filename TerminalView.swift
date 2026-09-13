@@ -279,6 +279,10 @@ struct TerminalView: View {
                                 miniKey("空格") { inputCommand.append(" ") }
                                 miniKey("x-ui") { runCommand("x-ui") }
                                 miniKey("88") { runCommand("88") }
+                                miniKey("q退出", color: .purple) {
+                                    // 专治卡在 less/more/man/vim 等交互程序里出不来的情况
+                                    session.sendCommand("q")
+                                }
                                 miniKey("退格", icon: "delete.left") {
                                     if !inputCommand.isEmpty { inputCommand.removeLast() }
                                 }

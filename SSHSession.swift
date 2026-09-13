@@ -2,7 +2,6 @@ import Foundation
 import Citadel
 import Combine
 import NIOCore
-import NIOSSH
 
 struct HistoryItem: Identifiable {
     var id = UUID()
@@ -26,32 +25,32 @@ class SSHSession: ObservableObject {
     func connect() {
         Task {
             do {
-                // 1. 发起 SSH 连接
+                // 1. 建立基础 SSH 连接（适配 Citadel 0.7+ 签名）
                 let client = try await SSHClient.connect(
                     host: self.host,
                     port: self.port,
-                    authentication: .passwordBased(username: self.username, password: self.password),
-                    hostKeyValidator: .acceptAnything()
+                    authenticationMethod: {
+                        .passwordBased(username: self.username, password: self.password)
+                    },
+                    hostKeyValidator: .acceptAnything(),
+                    reconnect: .never
                 )
                 self.client = client
                 self.isConnected = true
-                self.history.append(HistoryItem(command: "连接成功", output: "已连接到 \(self.host)，正在打开终端..."))
+                self.history.append(HistoryItem(command: "连接成功", output: "已连接到 \(self.host)，交互通道已就绪..."))
 
-                // 2. 建立 stdin 异步流，用于向远程输入内容
+                // 2. 创建用于持续输入的流
                 let (stdinStream, continuation) = AsyncStream<ByteBuffer>.makeStream()
                 self.stdinPipe = continuation
 
-                self.history.append(HistoryItem(command: "终端就绪", output: ""))
-
-                // 3. 申请 PTY 并启动 Shell 会话
-                // Citadel 会自动执行与远端的 PTY 协商
+                // 3. 启动交互式终端流
                 let stdoutStream = try await client.executeCommandStream(
-                    "", // 空命令在很多 SSH 实现中代表启动默认 Shell；若服务器要求显式命令，可传 "/bin/sh" 或 "/bin/bash"
+                    "/bin/sh -i",
                     environment: [:],
                     in: stdinStream
                 )
 
-                // 4. 读取远端输出
+                // 4. 实时监听远端输出（支持回显、命令结果流）
                 for try await chunk in stdoutStream {
                     let str = String(buffer: chunk)
                     let clean = str.replacingOccurrences(of: "\r", with: "")
@@ -60,12 +59,12 @@ class SSHSession: ObservableObject {
                         if self.history.isEmpty {
                             self.history.append(HistoryItem(command: "", output: clean))
                         } else {
-                            let lastIdx = self.history.count - 1
-                            self.history[lastIdx].output += clean
+                            let lastIndex = self.history.count - 1
+                            self.history[lastIndex].output += clean
                             
-                            // 限制历史长度，防止卡死
-                            if self.history[lastIdx].output.count > 20000 {
-                                self.history[lastIdx].output = String(self.history[lastIdx].output.suffix(15000))
+                            // 防止过长文本导致 SwiftUI 卡顿
+                            if self.history[lastIndex].output.count > 20000 {
+                                self.history[lastIndex].output = String(self.history[lastIndex].output.suffix(15000))
                             }
                         }
                     }
@@ -78,14 +77,14 @@ class SSHSession: ObservableObject {
     }
 
     func sendCommand(_ cmd: String) {
-        let c = cmd.trimmingCharacters(in: .whitespacesAndNewlines)
-        if c.isEmpty { return }
+        let trimmed = cmd.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return }
         
-        var buffer = ByteBufferAllocator().buffer(capacity: c.utf8.count + 1)
-        buffer.writeString(c + "\n")
+        var buffer = ByteBufferAllocator().buffer(capacity: trimmed.utf8.count + 1)
+        buffer.writeString(trimmed + "\n")
         self.stdinPipe?.yield(buffer)
 
-        self.history.append(HistoryItem(command: c, output: ""))
+        self.history.append(HistoryItem(command: trimmed, output: ""))
     }
 
     func sendCtrlC() {
@@ -103,12 +102,10 @@ class SSHSession: ObservableObject {
     func disconnect() {
         self.stdinPipe?.finish()
         self.stdinPipe = nil
-        
         Task {
             try? await self.client?.close()
-            await MainActor.run {
-                self.isConnected = false
-            }
+            self.client = nil
+            self.isConnected = false
         }
     }
 }

@@ -1,13 +1,14 @@
 name: MySSH
 options:
   bundleIdPrefix: com.myssh
+  xcodeVersion: "15.0"
 targets:
   MySSH:
     type: application
     platform: iOS
-    deploymentTarget: "16.0"
+    deploymentTarget: "17.0"
     sources: ["."]
-    excludes: ["README.md", "一键构建说明.txt"]
+    excludes: ["README.md", "一键构建说明.txt", ".github"]
     info:
       path: Info.plist
       properties: {}

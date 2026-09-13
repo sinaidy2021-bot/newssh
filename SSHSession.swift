@@ -18,6 +18,8 @@ final class SSHSession: ObservableObject {
     private var pendingOutput = ""
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var disconnectRequested = false
+    private var suppressInitialBanner = true
+    private var initialBannerBuffer = ""
 
     let host: String
     let port: Int
@@ -44,8 +46,11 @@ final class SSHSession: ObservableObject {
     func connect() {
         guard !isConnected, connectionTask == nil else { return }
         disconnectRequested = false
+        suppressInitialBanner = true
+        initialBannerBuffer = ""
+        terminalText = ""
+        pendingOutput = ""
         statusText = "正在连接…"
-        appendLocalMessage("\n[正在连接 \(host):\(port)…]\n")
 
         let host = self.host
         let port = self.port
@@ -97,7 +102,10 @@ final class SSHSession: ObservableObject {
             self.activeWriter = writer
             self.isConnected = true
             self.statusText = "已连接"
-            self.appendLocalMessage("[SSH 已连接]\n")
+            self.suppressInitialBanner = true
+            self.initialBannerBuffer = ""
+            self.terminalText = ""
+            self.pendingOutput = ""
 
             do {
                 try await self.writeRaw(
@@ -142,7 +150,6 @@ final class SSHSession: ObservableObject {
 
             if !self.disconnectRequested {
                 self.statusText = "连接已断开"
-                self.appendLocalMessage("\n[连接已断开]\n")
             }
         }
     }
@@ -195,6 +202,29 @@ final class SSHSession: ObservableObject {
         let cleaned = cleanANSI(raw)
         guard !cleaned.isEmpty else { return }
 
+        // SSH 登录后服务器可能先发送 Ubuntu MOTD、Last login 等欢迎信息。
+        // 首次连接期间不把这些内容显示出来，只等待真正的 shell 提示符。
+        if suppressInitialBanner {
+            initialBannerBuffer += cleaned
+
+            // 防止异常服务器无限堆积登录横幅。
+            if initialBannerBuffer.count > 16000 {
+                initialBannerBuffer = String(initialBannerBuffer.suffix(16000))
+            }
+
+            if let prompt = extractInitialPrompt(from: initialBannerBuffer) {
+                suppressInitialBanner = false
+                initialBannerBuffer = ""
+                pendingOutput = ""
+                terminalText = prompt
+                if !prompt.hasSuffix("\n") {
+                    terminalText += "\n"
+                }
+                outputRevision &+= 1
+            }
+            return
+        }
+
         pendingOutput += cleaned
 
         guard flushTask == nil else { return }
@@ -214,6 +244,26 @@ final class SSHSession: ObservableObject {
         pendingOutput = ""
         trimTerminalIfNeeded()
         outputRevision &+= 1
+    }
+
+    private func extractInitialPrompt(from text: String) -> String? {
+        let lines = text.components(separatedBy: "\n")
+        guard !lines.isEmpty else { return nil }
+
+        for line in lines.reversed() {
+            let candidate = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !candidate.isEmpty else { continue }
+
+            // 常见 shell 提示符：root@host:~#、user@host:~$、% 或 >。
+            if candidate.range(
+                of: #"^[^\n]{1,240}(?:[#%$>])$"#,
+                options: .regularExpression
+            ) != nil {
+                return candidate
+            }
+        }
+
+        return nil
     }
 
     private func appendLocalMessage(_ text: String) {
@@ -295,7 +345,6 @@ final class SSHSession: ObservableObject {
         activeWriter = nil
         isConnected = false
         statusText = "已断开"
-        appendLocalMessage("\n[已主动断开]\n")
 
         if let oldClient {
             Task {

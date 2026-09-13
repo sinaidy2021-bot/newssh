@@ -29,6 +29,11 @@ struct TerminalView: View {
 
     private let storageKey = "SavedQuickCommands"
 
+    // MARK: - 输出过长保护
+    // 数据量大时黑屏的主因之一：单条输出被一次性、非懒加载地全部渲染成大量子视图。
+    // 这里做两件事：1) 用 LazyVStack 代替普通 VStack；2) 超长输出只渲染尾部一部分。
+    private let maxRenderedLinesPerBlock = 400
+
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
@@ -99,9 +104,9 @@ struct TerminalView: View {
                                                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                                                 .foregroundColor(.cyan)
                                                 .textSelection(.enabled)
-                                            
+
                                             Spacer()
-                                            
+
                                             Button(action: {
                                                 let fullBlock = "root@\(serverName)~# \(item.command)\n" + item.output
                                                 copyBlock(fullBlock, tip: "已复制整段命令与输出")
@@ -118,8 +123,32 @@ struct TerminalView: View {
                                                 .cornerRadius(4)
                                             }
                                         }
-                                        
+
                                         renderOutputLines(item.output, defaultColor: .green)
+
+                                        // 输出可能很长，顶部的"复制整段"要往上滑才够得到，
+                                        // 这里在输出末尾再放一个一样的按钮，看完就能直接点。
+                                        if !item.output.isEmpty {
+                                            HStack {
+                                                Spacer()
+                                                Button(action: {
+                                                    let fullBlock = "root@\(serverName)~# \(item.command)\n" + item.output
+                                                    copyBlock(fullBlock, tip: "已复制整段命令与输出")
+                                                }) {
+                                                    HStack(spacing: 3) {
+                                                        Image(systemName: "doc.on.doc")
+                                                        Text("复制整段")
+                                                    }
+                                                    .font(.system(size: 10, weight: .medium))
+                                                    .foregroundColor(.gray)
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 3)
+                                                    .background(Color(white: 0.18))
+                                                    .cornerRadius(4)
+                                                }
+                                            }
+                                            .padding(.top, 4)
+                                        }
                                     }
                                 }
                                 .padding(8)
@@ -217,85 +246,94 @@ struct TerminalView: View {
                                     .foregroundColor(.gray)
                             }
                         }
-
-                        // 快捷粘贴小按钮
-                        Button(action: {
-                            if let pasteString = UIPasteboard.general.string {
-                                inputCommand.append(pasteString)
-                                showToast("已从剪贴板粘贴")
-                            } else {
-                                showToast("剪贴板为空")
-                            }
-                        }) {
-                            Text("粘贴")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundColor(.cyan)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 4)
-                                .background(Color(white: 0.2))
-                                .cornerRadius(5)
-                        }
-
-                        Button(action: { executeCurrentInput() }) {
-                            Text("回车")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 4)
-                                .background(Color.blue)
-                                .cornerRadius(5)
-                        }
                     }
                     .padding(.horizontal, 8)
-                    .padding(.bottom, 6)
+                    .padding(.bottom, 4)
 
+                    // MARK: - 重新设计的微型键盘
+                    // 左侧：数字/控制键区（多行）。右侧：一列纵向按钮，
+                    // 「粘贴」在上，「回车」在下且明显更大更好按，符合单手右下角操作习惯。
                     if showMiniKeyboard {
-                        VStack(spacing: 6) {
-                            HStack(spacing: 5) {
-                                miniKey("1")
-                                miniKey("2")
-                                miniKey("3")
-                                miniKey("4")
-                                miniKey("5")
-                                miniKey("k")
-                                miniKey("Ctrl+C", color: .red) {
-                                    session.sendCommand("\u{03}")
+                        HStack(alignment: .top, spacing: 6) {
+                            VStack(spacing: 6) {
+                                HStack(spacing: 5) {
+                                    miniKey("1")
+                                    miniKey("2")
+                                    miniKey("3")
+                                    miniKey("4")
+                                    miniKey("5")
+                                    miniKey("k")
+                                }
+                                HStack(spacing: 5) {
+                                    miniKey("6")
+                                    miniKey("7")
+                                    miniKey("8")
+                                    miniKey("9")
+                                    miniKey("0")
+                                    miniKey("-")
+                                }
+                                HStack(spacing: 5) {
+                                    miniKey("Ctrl+C", color: .red) {
+                                        session.sendCommand("\u{03}")
+                                    }
+                                    miniKey("ESC", color: .orange) {
+                                        session.sendCommand("\u{1B}")
+                                    }
+                                    miniKey("空格") { inputCommand.append(" ") }
+                                    miniKey("退格", icon: "delete.left") {
+                                        if !inputCommand.isEmpty { inputCommand.removeLast() }
+                                    }
+                                }
+                                HStack(spacing: 5) {
+                                    miniKey("x-ui") { runCommand("x-ui") }
+                                    miniKey("88") { runCommand("88") }
+                                    miniKey("q退出", color: .purple) {
+                                        // 专治卡在 less/more/man/vim 等交互程序里出不来的情况
+                                        session.sendCommand("q")
+                                    }
                                 }
                             }
 
-                            HStack(spacing: 5) {
-                                miniKey("6")
-                                miniKey("7")
-                                miniKey("8")
-                                miniKey("9")
-                                miniKey("0")
-                                miniKey("-")
-                                miniKey("ESC", color: .orange) {
-                                    session.sendCommand("\u{1B}")
-                                }
-                            }
-
-                            HStack(spacing: 5) {
-                                miniKey("空格") { inputCommand.append(" ") }
-                                miniKey("x-ui") { runCommand("x-ui") }
-                                miniKey("88") { runCommand("88") }
-                                miniKey("q退出", color: .purple) {
-                                    // 专治卡在 less/more/man/vim 等交互程序里出不来的情况
-                                    session.sendCommand("q")
-                                }
-                                miniKey("退格", icon: "delete.left") {
-                                    if !inputCommand.isEmpty { inputCommand.removeLast() }
-                                }
-                                miniKey("粘贴", icon: "doc.on.clipboard", color: Color.blue.opacity(0.4)) {
+                            // 右侧纵向列：粘贴（上）+ 回车（下，放大）
+                            VStack(spacing: 6) {
+                                Button(action: {
                                     if let pasteString = UIPasteboard.general.string {
                                         inputCommand.append(pasteString)
                                         showToast("已粘贴剪贴板内容")
                                     } else {
                                         showToast("剪贴板为空")
                                     }
+                                }) {
+                                    VStack(spacing: 2) {
+                                        Image(systemName: "doc.on.clipboard")
+                                            .font(.system(size: 15))
+                                        Text("粘贴")
+                                            .font(.system(size: 12, weight: .semibold))
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 56)
+                                    .background(Color.blue.opacity(0.35))
+                                    .foregroundColor(.white)
+                                    .cornerRadius(8)
+                                }
+
+                                Button(action: { executeCurrentInput() }) {
+                                    VStack(spacing: 4) {
+                                        Image(systemName: "return")
+                                            .font(.system(size: 20, weight: .bold))
+                                        Text("回车")
+                                            .font(.system(size: 14, weight: .bold))
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .frame(maxHeight: .infinity)
+                                    .background(Color.blue)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(8)
                                 }
                             }
+                            .frame(width: 78)
                         }
+                        .frame(height: 176)
                         .padding(.horizontal, 6)
                         .padding(.bottom, 6)
                     }
@@ -377,11 +415,37 @@ struct TerminalView: View {
         showToast(tip)
     }
 
+    // MARK: - ANSI 转义序列过滤
+    // vim / less / top / 各种菜单程序（k 菜单、x-ui 等）在全屏模式下会输出
+    // 光标定位、清屏、颜色等 ANSI 控制序列。这些序列原样塞进 output 字符串后，
+    // 既会在界面上显示成乱码，又会在数据量大时显著增加渲染开销，是黑屏的重要成因之一。
+    // 这里统一过滤掉，只保留纯文本内容。
+    private func stripANSIEscapeCodes(_ text: String) -> String {
+        // 匹配 CSI 序列 (ESC [ ... 字母)、OSC 序列 (ESC ] ... BEL) 以及其他单字符转义
+        let pattern = "\u{1B}(\\[[0-9;?]*[a-zA-Z]|\\][^\u{07}]*\u{07}|[()][A-Za-z0-9]|[@-Z\\\\^_])"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
+    }
+
     @ViewBuilder
     private func renderOutputLines(_ fullText: String, defaultColor: Color) -> some View {
-        let lines = fullText.components(separatedBy: "\n")
+        let cleaned = stripANSIEscapeCodes(fullText)
+        let allLines = cleaned.components(separatedBy: "\n")
 
-        VStack(alignment: .leading, spacing: 2) {
+        let isTruncated = allLines.count > maxRenderedLinesPerBlock
+        let lines = isTruncated ? Array(allLines.suffix(maxRenderedLinesPerBlock)) : allLines
+
+        // 用 LazyVStack 代替普通 VStack：单条输出行数很多时（比如几百上千行的
+        // find/ls 结果），只渲染屏幕附近可见的行，避免一次性生成大量子视图卡死主线程。
+        LazyVStack(alignment: .leading, spacing: 2) {
+            if isTruncated {
+                Text("⚠️ 输出过长（共 \(allLines.count) 行），仅显示最后 \(maxRenderedLinesPerBlock) 行。点击"复制整段"可获取完整内容。")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.orange)
+                    .padding(.bottom, 2)
+            }
+
             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
                 let isPromptLine =
@@ -389,7 +453,7 @@ struct TerminalView: View {
                     trimmed.hasPrefix("user@") ||
                     trimmed.contains("~#")
 
-                // 对返回结果中真正的“字段: 值”行提供一键复制。
+                // 对返回结果中真正的"字段: 值"行提供一键复制。
                 // URL 本身（http:// / https://）仍然整行复制。
                 let copyValue = copyValueForOutputLine(line)
                 let isCopyableLine = !isPromptLine && !trimmed.isEmpty && copyValue != nil

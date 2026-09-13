@@ -2,6 +2,7 @@ import Foundation
 import Citadel
 import Combine
 import NIOCore
+import NIOSSH
 
 struct HistoryItem: Identifiable {
     var id = UUID()
@@ -25,7 +26,7 @@ class SSHSession: ObservableObject {
     func connect() {
         Task {
             do {
-                // authenticationMethod 直接传值，不需要闭包大括号
+                // 1. 认证与握手连接
                 let client = try await SSHClient.connect(
                     host: self.host,
                     port: self.port,
@@ -37,18 +38,22 @@ class SSHSession: ObservableObject {
                 self.isConnected = true
                 self.history.append(HistoryItem(command: "连接成功", output: "已连接到 \(self.host)，交互通道已就绪..."))
 
-                // 创建输入管道
+                // 2. 双向交互流：executeCommandPair 返回 (in: TTYStdinWriter/管道, out: AsyncStream)
+                // 默认使用交互式 shell
+                let (stdinWriter, stdoutStream) = try await client.executeCommandPair("/bin/sh -i")
+
+                // 创建输入流中继管道
                 let (stdinStream, continuation) = AsyncStream<ByteBuffer>.makeStream()
                 self.stdinPipe = continuation
 
-                // 启动交互命令流
-                let stdoutStream = try await client.executeCommandStream(
-                    "/bin/sh -i",
-                    environment: [:],
-                    in: stdinStream
-                )
+                // 将内部管道的数据持续推送给 Citadel 的输入流
+                Task {
+                    for await chunk in stdinStream {
+                        try? await stdinWriter.write(chunk)
+                    }
+                }
 
-                // 读取输出
+                // 3. 异步读取远程终端回显与输出
                 for try await chunk in stdoutStream {
                     let str = String(buffer: chunk)
                     let clean = str.replacingOccurrences(of: "\r", with: "")
@@ -60,6 +65,7 @@ class SSHSession: ObservableObject {
                             let lastIndex = self.history.count - 1
                             self.history[lastIndex].output += clean
                             
+                            // 防止大量输出撑爆内存和卡死 UI
                             if self.history[lastIndex].output.count > 20000 {
                                 self.history[lastIndex].output = String(self.history[lastIndex].output.suffix(15000))
                             }

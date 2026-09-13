@@ -6,11 +6,12 @@ import NIOCore
 import NIOSSH
 
 public struct CommandHistoryItem: Identifiable {
-    public let id = UUID()
+    public let id: UUID
     public let command: String
     public var output: String
 
     public init(command: String, output: String) {
+        self.id = UUID()
         self.command = command
         self.output = output
     }
@@ -30,7 +31,7 @@ final class SSHSession: ObservableObject {
     var password: String = ""
 
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
-    private var keepAliveTimer: Timer?
+    private var writeChain: Task<Void, Never>?
 
     // MARK: - 输出批处理
     // 大量输出时不要每个 SSH chunk 都触发 SwiftUI 重绘。
@@ -45,6 +46,10 @@ final class SSHSession: ObservableObject {
     }
 
     private var pendingCommands: [PendingCommand] = []
+    private var activeInteractiveID: UUID?
+    private var interactivePromptBuffer = ""
+    private var markerBuffer = ""
+    private var truncatedIDs = Set<UUID>()
 
     // 终端中用 shell marker 判断一条命令何时结束。
     private let commandEndMarker = "__MYSSH_DONE_7F3A9C__"
@@ -56,38 +61,38 @@ final class SSHSession: ObservableObject {
     private let maxHistoryItems = 120
 
     // MARK: - ANSI 清理
+    private enum ANSIState { case normal, escape, csi, osc, oscEscape }
+    private var ansiState: ANSIState = .normal
+
     private func cleanANSI(_ raw: String) -> String {
-        var text = raw
-
-        // OSC：ESC ] ... BEL / ESC \
-        text = text.replacingOccurrences(
-            of: #"\x1B\][^\x07\x1B]*(\x07|\x1B\\)?"#,
-            with: "",
-            options: .regularExpression
-        )
-
-        // CSI：ESC [ 参数/中间字节 最终字节
-        text = text.replacingOccurrences(
-            of: #"\x1B\[[0-9;?]*[ -/]*[@-~]"#,
-            with: "",
-            options: .regularExpression
-        )
-
-        // 其他常见 ESC 双字符序列
-        text = text.replacingOccurrences(
-            of: #"\x1B[@-Z\\-_]"#,
-            with: "",
-            options: .regularExpression
-        )
-
-        text = text.replacingOccurrences(of: "\u{001B}", with: "")
-        text = text.replacingOccurrences(of: "\u{009B}", with: "")
-
-        // PTY 常见 CRLF -> LF；裸 CR 不显示，避免产生大量覆盖式垃圾。
-        text = text.replacingOccurrences(of: "\r\n", with: "\n")
-        text = text.replacingOccurrences(of: "\r", with: "")
-
-        return text
+        var result = ""
+        for scalar in raw.unicodeScalars {
+            let v = scalar.value
+            switch ansiState {
+            case .normal:
+                if v == 0x1B { ansiState = .escape }
+                else if v == 0x9B { ansiState = .csi }
+                else if v == 0x9D { ansiState = .osc }
+                else if v == 0x0D || v == 0x07 { }
+                else if v < 0x20 && v != 0x09 && v != 0x0A { }
+                else { result.unicodeScalars.append(scalar) }
+            case .escape:
+                if v == 0x5B { ansiState = .csi }
+                else if v == 0x5D { ansiState = .osc }
+                else if v == 0x1B { ansiState = .escape }
+                else { ansiState = .normal }
+            case .csi:
+                if v >= 0x40 && v <= 0x7E { ansiState = .normal }
+            case .osc:
+                if v == 0x07 { ansiState = .normal }
+                else if v == 0x1B { ansiState = .oscEscape }
+            case .oscEscape:
+                if v == 0x5C || v == 0x07 { ansiState = .normal }
+                else if v == 0x1B { ansiState = .oscEscape }
+                else { ansiState = .osc }
+            }
+        }
+        return result
     }
 
     // MARK: - 连接
@@ -98,6 +103,11 @@ final class SSHSession: ObservableObject {
         flushTask = nil
         pendingOutput = ""
         pendingCommands.removeAll()
+        activeInteractiveID = nil
+        interactivePromptBuffer = ""
+        markerBuffer = ""
+        truncatedIDs.removeAll()
+        ansiState = .normal
 
         Task {
             do {
@@ -114,7 +124,6 @@ final class SSHSession: ObservableObject {
 
                 self.client = client
                 self.isConnected = true
-                self.startKeepAlive()
 
                 let ptyReq = SSHChannelRequestEvent.PseudoTerminalRequest(
                     wantReply: true,
@@ -200,178 +209,199 @@ final class SSHSession: ObservableObject {
     }
 
     private func processOutput(_ text: String) {
-        var remaining = text
-
-        while let markerRange = remaining.range(of: commandEndMarker) {
-            let beforeMarker = String(remaining[..<markerRange.lowerBound])
-
-            if !beforeMarker.isEmpty {
-                appendOutputToCurrentCommand(beforeMarker)
+        if let interactiveID = activeInteractiveID {
+            appendOutput(text, to: interactiveID)
+            interactivePromptBuffer.append(text)
+            if shellPromptAppeared(in: interactivePromptBuffer) {
+                activeInteractiveID = nil
+                interactivePromptBuffer = ""
+            } else if interactivePromptBuffer.count > 2000 {
+                interactivePromptBuffer = String(interactivePromptBuffer.suffix(1000))
             }
-
-            completeCurrentCommand()
-            remaining = String(remaining[markerRange.upperBound...])
+            return
         }
 
-        if !remaining.isEmpty {
-            appendOutputToCurrentCommand(remaining)
+        markerBuffer.append(text)
+        while let range = markerBuffer.range(of: commandEndMarker) {
+            let before = String(markerBuffer[..<range.lowerBound])
+            appendOutputToCurrentCommand(before)
+            completeCurrentCommand()
+            markerBuffer = String(markerBuffer[range.upperBound...])
+        }
+
+        let maxPrefix = min(commandEndMarker.count - 1, markerBuffer.count)
+        var splitIndex = markerBuffer.endIndex
+        if maxPrefix > 0 {
+            for length in stride(from: maxPrefix, through: 1, by: -1) {
+                let idx = markerBuffer.index(markerBuffer.endIndex, offsetBy: -length)
+                if markerBuffer[idx...].hasPrefix(String(commandEndMarker.prefix(length))) {
+                    splitIndex = idx
+                    break
+                }
+            }
+        }
+        if splitIndex != markerBuffer.endIndex {
+            appendOutputToCurrentCommand(String(markerBuffer[..<splitIndex]))
+            markerBuffer = String(markerBuffer[splitIndex...])
+        } else {
+            appendOutputToCurrentCommand(markerBuffer)
+            markerBuffer = ""
         }
     }
 
     private func appendOutputToCurrentCommand(_ text: String) {
-        guard !text.isEmpty else { return }
-        guard let pending = pendingCommands.first else {
-            // 未发送命令前的 MOTD / 登录信息不塞进终端历史。
-            return
-        }
-
-        guard let index = history.firstIndex(where: { $0.id == pending.id }) else {
-            return
-        }
-
-        var item = history[index]
-        var output = item.output
-
-        if output.isEmpty {
-            output = text
-        } else {
-            output += text
-        }
-
-        // PTY 若返回命令回显，去掉一次。
-        if output.hasPrefix(pending.command + "\n") {
-            output = String(output.dropFirst(pending.command.count + 1))
-        } else if output.hasPrefix(pending.command) {
-            output = String(output.dropFirst(pending.command.count))
-        }
-
-        if output.count > maxOutputCharactersPerCommand {
-            output = String(output.prefix(maxOutputCharactersPerCommand))
-            if !output.hasSuffix("\n") {
-                output += "\n"
-            }
-            output += "[输出过长，已限制显示]"
-        }
-
-        item.output = output
-        history[index] = item
+        guard let pending = pendingCommands.first, !text.isEmpty else { return }
+        appendOutput(text, to: pending.id, echoCommand: pending.command)
     }
 
-    private func completeCurrentCommand() {
-        guard !pendingCommands.isEmpty else { return }
-        pendingCommands.removeFirst()
+    private func appendOutput(_ text: String, to id: UUID, echoCommand: String? = nil) {
+        guard let index = history.firstIndex(where: { $0.id == id }), !truncatedIDs.contains(id) else { return }
+        var output = history[index].output + text
+        if let echoCommand {
+            if output.hasPrefix(echoCommand + "\n") { output.removeFirst(echoCommand.count + 1) }
+            else if output.hasPrefix(echoCommand) { output.removeFirst(echoCommand.count) }
+        }
+        if output.count >= maxOutputCharactersPerCommand {
+            output = String(output.prefix(maxOutputCharactersPerCommand)) + "\n[输出过长，已限制显示]"
+            truncatedIDs.insert(id)
+        }
+        history[index].output = output
+    }
+
+    private func shellPromptAppeared(in text: String) -> Bool {
+        let line = text.split(separator: "\n", omittingEmptySubsequences: true).last.map(String.init) ?? text
+        let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.range(of: #"^[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+:.*[#$] ?$"#, options: .regularExpression) != nil
     }
 
     private func appendHistory(_ item: CommandHistoryItem) {
         history.append(item)
-
-        if history.count > maxHistoryItems {
-            history.removeFirst(history.count - maxHistoryItems)
+        while history.count > maxHistoryItems {
+            let protected = Set(pendingCommands.map { $0.id }).union(activeInteractiveID.map { [$0] } ?? [])
+            guard let index = history.firstIndex(where: { !protected.contains($0.id) }) else { break }
+            let removed = history.remove(at: index)
+            truncatedIDs.remove(removed.id)
         }
     }
 
     // MARK: - 发送命令
     func sendCommand(_ command: String) {
         guard isConnected else { return }
-
         let cmd = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cmd.isEmpty else { return }
-        guard let writer = activeWriter else { return }
 
-        let id = UUID()
+        let item = CommandHistoryItem(command: cmd, output: "")
+        appendHistory(item)
+        pendingCommands.append(PendingCommand(id: item.id, command: cmd))
 
-        appendHistory(
-            CommandHistoryItem(command: cmd, output: "")
-        )
-
-        if let actualID = history.last?.id {
-            pendingCommands.append(
-                PendingCommand(id: actualID, command: cmd)
-            )
-        } else {
-            return
+        enqueueWrite("\(cmd)\nprintf '\\n\(commandEndMarker)\\n'\n") { [weak self] error in
+            guard let self else { return }
+            if let error { self.handleWriteFailure(id: item.id, error: error) }
         }
+    }
 
-        Task {
-            do {
-                var buffer = ByteBufferAllocator().buffer(
-                    capacity: cmd.utf8.count + commandEndMarker.utf8.count + 64
-                )
+    func sendInteractiveCommand(_ command: String) {
+        guard isConnected else { return }
+        let cmd = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cmd.isEmpty else { return }
+        guard activeInteractiveID == nil else { return }
 
-                // 每条命令结束后输出唯一 marker。
-                // marker 本身不会进入历史显示，只用于给客户端做命令边界。
-                buffer.writeString(
-                    "\(cmd)\nprintf '\\n\(commandEndMarker)\\n'\n"
-                )
+        let item = CommandHistoryItem(command: cmd, output: "")
+        appendHistory(item)
+        activeInteractiveID = item.id
+        interactivePromptBuffer = ""
 
-                try await writer.write(buffer)
-            } catch {
-                self.handleWriteFailure(id: id, error: error)
+        enqueueWrite("\(cmd)\n") { [weak self] error in
+            guard let self else { return }
+            if let error {
+                self.handleWriteFailure(id: item.id, error: error)
+                if self.activeInteractiveID == item.id {
+                    self.activeInteractiveID = nil
+                    self.interactivePromptBuffer = ""
+                }
             }
         }
     }
 
     private func handleWriteFailure(id: UUID, error: Error) {
         if let index = history.firstIndex(where: { $0.id == id }) {
-            history[index].output = "写入失败: \(error.localizedDescription)"
+            history[index].output = "写入失败：\(error.localizedDescription)"
         }
-
         pendingCommands.removeAll { $0.id == id }
+        if activeInteractiveID == id {
+            activeInteractiveID = nil
+            interactivePromptBuffer = ""
+        }
     }
 
     // MARK: - 控制键
-    // Ctrl+C / ESC / 空格 / 退格等直接写 PTY，不创建命令历史。
+    // 控制键直接进入同一个串行写入队列，不创建命令历史。
     func sendControl(_ value: String) {
-        guard isConnected, let writer = activeWriter else { return }
+        guard isConnected else { return }
+        enqueueWrite(value)
+    }
 
-        Task {
-            var buffer = ByteBufferAllocator().buffer(
-                capacity: value.utf8.count
-            )
-            buffer.writeString(value)
-            try? await writer.write(buffer)
+    func sendCtrlC() { sendControl("\u{03}") }
+    func sendEscape() { sendControl("\u{1B}") }
+    func sendSpace() { sendControl(" ") }
+    func sendBackspace() { sendControl("\u{7F}") }
+
+    // MARK: - 串行写入
+    private func enqueueWrite(
+        _ value: String,
+        completion: ((Error?) -> Void)? = nil
+    ) {
+        guard let writer = activeWriter else {
+            completion?(NSError(
+                domain: "MySSH",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "SSH 写入通道不存在"]
+            ))
+            return
         }
-    }
 
-    func sendCtrlC() {
-        sendControl("\u{03}")
-    }
+        let previous = writeChain
+        let task = Task { [weak self] in
+            if let previous { await previous.value }
+            guard let self else { return }
 
-    func sendEscape() {
-        sendControl("\u{1B}")
-    }
-
-    func sendSpace() {
-        sendControl(" ")
-    }
-
-    func sendBackspace() {
-        sendControl("\u{7F}")
-    }
-
-    // MARK: - Keep Alive
-    private func startKeepAlive() {
-        stopKeepAlive()
-
-        keepAliveTimer = Timer.scheduledTimer(
-            withTimeInterval: 25.0,
-            repeats: true
-        ) { [weak self] _ in
-            guard let self = self,
-                  self.isConnected,
-                  let writer = self.activeWriter else { return }
-
-            Task {
-                var buffer = ByteBufferAllocator().buffer(capacity: 1)
-                buffer.writeString("")
-                try? await writer.write(buffer)
+            do {
+                var buffer = ByteBufferAllocator().buffer(capacity: value.utf8.count)
+                buffer.writeString(value)
+                try await writer.write(buffer)
+                completion?(nil)
+            } catch {
+                completion?(error)
+                self.appendHistory(CommandHistoryItem(
+                    command: "system",
+                    output: "写入失败：\(error.localizedDescription)"
+                ))
             }
         }
+        writeChain = task
     }
 
-    private func stopKeepAlive() {
-        keepAliveTimer?.invalidate()
-        keepAliveTimer = nil
+    // MARK: - 断开
+    func disconnect() {
+        flushOutput()
+        let clientToClose = client
+        client = nil
+        activeWriter = nil
+        isConnected = false
+        writeChain?.cancel()
+        writeChain = nil
+        pendingCommands.removeAll()
+        activeInteractiveID = nil
+        interactivePromptBuffer = ""
+        markerBuffer = ""
+        pendingOutput = ""
+
+        appendHistory(CommandHistoryItem(
+            command: "system",
+            output: "已主动断开连接"
+        ))
+
+        Task { try? await clientToClose?.close() }
     }
 
     // MARK: - App 生命周期
@@ -404,6 +434,9 @@ final class SSHSession: ObservableObject {
         activeWriter = nil
         stopKeepAlive()
         pendingCommands.removeAll()
+        activeInteractiveID = nil
+        interactivePromptBuffer = ""
+        markerBuffer = ""
 
         if let message, !message.isEmpty {
             appendHistory(
@@ -422,6 +455,9 @@ final class SSHSession: ObservableObject {
         activeWriter = nil
         isConnected = false
         pendingCommands.removeAll()
+        activeInteractiveID = nil
+        interactivePromptBuffer = ""
+        markerBuffer = ""
         pendingOutput = ""
 
         Task {

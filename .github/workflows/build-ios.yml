@@ -18,12 +18,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           ICON="AppIconSource.png"
           test -f "$ICON"
 
           rm -rf Assets.xcassets
           mkdir -p Assets.xcassets/AppIcon.appiconset
-          cp "$ICON" Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png
+
+          cp "$ICON" \
+            Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png
 
           cat > Assets.xcassets/Contents.json <<'JSON'
           {
@@ -53,6 +56,7 @@ jobs:
 
           WIDTH=$(sips -g pixelWidth "$ICON" | awk '/pixelWidth/ {print $2}')
           HEIGHT=$(sips -g pixelHeight "$ICON" | awk '/pixelHeight/ {print $2}')
+
           test "$WIDTH" = "1024"
           test "$HEIGHT" = "1024"
 
@@ -63,6 +67,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           test -f Info.plist
           test -f Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png
           test -f Assets.xcassets/AppIcon.appiconset/Contents.json
@@ -72,6 +77,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+
           rm -rf build
           mkdir -p build
 
@@ -90,12 +96,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           APP="build/MySSH.xcarchive/Products/Applications/MySSH.app"
 
-          test -d "$APP" || { echo "ROOT CAUSE: archive did not contain MySSH.app"; exit 1; }
-          test -f "$APP/Info.plist" || { echo "ROOT CAUSE: MySSH.app/Info.plist is missing"; exit 1; }
+          test -d "$APP" || {
+            echo "ROOT CAUSE: archive did not contain MySSH.app"
+            exit 1
+          }
 
-          EXECUTABLE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP/Info.plist") || {
+          test -f "$APP/Info.plist" || {
+            echo "ROOT CAUSE: MySSH.app/Info.plist is missing"
+            exit 1
+          }
+
+          EXECUTABLE=$(
+            /usr/libexec/PlistBuddy \
+              -c "Print :CFBundleExecutable" \
+              "$APP/Info.plist"
+          ) || {
             echo "ROOT CAUSE: CFBundleExecutable is missing from Info.plist"
             exit 1
           }
@@ -116,14 +134,14 @@ jobs:
           }
 
           FILE_INFO=$(file "$APP/$EXECUTABLE")
+
           echo "$FILE_INFO"
 
-          # macOS file output is:
-          # Mach-O 64-bit executable arm64
-          echo "$FILE_INFO" | grep -q "Mach-O 64-bit executable arm64" || {
-            echo "ROOT CAUSE: main executable is not a 64-bit arm64 Mach-O"
-            exit 1
-          }
+          echo "$FILE_INFO" | grep -q \
+            "Mach-O 64-bit executable arm64" || {
+              echo "ROOT CAUSE: main executable is not a 64-bit arm64 Mach-O"
+              exit 1
+            }
 
           echo "Archive verified successfully."
 
@@ -131,60 +149,258 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           APP="build/MySSH.xcarchive/Products/Applications/MySSH.app"
-          rm -rf build/Payload build/MySSH-unsigned.ipa
+
+          rm -rf build/Payload
+          rm -f build/MySSH-unsigned.ipa
+
           mkdir -p build/Payload
+
           cp -R "$APP" build/Payload/MySSH.app
-          (cd build && zip -qry MySSH-unsigned.ipa Payload)
+
+          (
+            cd build
+            zip -qry MySSH-unsigned.ipa Payload
+          )
+
           test -f build/MySSH-unsigned.ipa
 
-      - name: Upload IPA and build log
-        if: ${{ success() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: MySSH-unsigned-IPA
-          path: |
-            build/MySSH-unsigned.ipa
-            build/xcodebuild.log
-
-      - name: 输出简洁失败诊断
+      # ============================================================
+      # 失败后自动生成“人话版”错误报告
+      # ============================================================
+      - name: Generate readable failure report
         if: ${{ failure() }}
         shell: bash
         run: |
           set +e
-          echo "=============================="
-          echo "MySSH 构建失败：根因诊断"
-          echo "=============================="
 
-          if [ -f build/xcodebuild.log ]; then
+          REPORT="build/MySSH-构建错误报告.txt"
+          LOG="build/xcodebuild.log"
+
+          mkdir -p build
+
+          {
+            echo "========================================"
+            echo "          MySSH 构建错误报告"
+            echo "========================================"
             echo ""
-            echo "【Xcode 真正错误】"
-            grep -n -E "error:|fatal error:|BUILD FAILED|Command .* failed" \
-              build/xcodebuild.log | tail -n 30 || echo "未发现 Xcode 编译错误；失败可能发生在归档验证或打包步骤。"
-          fi
+            echo "结论：本次 GitHub Actions 构建失败。"
+            echo ""
+            echo "下面只显示需要处理的错误。"
+            echo "不需要你从几百行原始日志里自己找。"
+            echo ""
 
-          echo ""
-          echo "【归档文件状态】"
-          if [ -d build/MySSH.xcarchive/Products/Applications/MySSH.app ]; then
-            APP="build/MySSH.xcarchive/Products/Applications/MySSH.app"
-            echo "MySSH.app: 存在"
-            if [ -f "$APP/Info.plist" ]; then
-              echo "Info.plist: 存在"
-              EXEC=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP/Info.plist" 2>/dev/null)
-              echo "CFBundleExecutable: ${EXEC:-缺失}"
-              if [ -n "$EXEC" ] && [ -f "$APP/$EXEC" ]; then
-                echo "主程序: 存在"
-                file "$APP/$EXEC"
-              else
-                echo "主程序: 缺失"
-              fi
+            echo "========================================"
+            echo "【1】真正的 Xcode 错误"
+            echo "========================================"
+            echo ""
+
+            if [ -f "$LOG" ]; then
+
+              grep -n -E \
+                "error:|fatal error:|BUILD FAILED|Command .* failed|SwiftCompile|CompileSwift|Ld |CodeSign|Provisioning" \
+                "$LOG" | tail -n 80 || \
+                echo "没有找到标准 Xcode 错误。"
+
             else
-              echo "Info.plist: 缺失"
+
+              echo "没有找到 xcodebuild.log。"
+              echo ""
+              echo "说明："
+              echo "构建可能在 Xcode 编译开始之前就失败了。"
+
             fi
-          else
-            echo "MySSH.app: 不存在"
-          fi
+
+            echo ""
+            echo "========================================"
+            echo "【2】错误附近的上下文"
+            echo "========================================"
+            echo ""
+
+            if [ -f "$LOG" ]; then
+
+              awk '
+                /error:|fatal error:|BUILD FAILED|Command .* failed/ {
+                  start=NR-3
+                  if (start<1) start=1
+
+                  end=NR+3
+
+                  for (i=start;i<=end;i++) {
+                    wanted[i]=1
+                  }
+                }
+
+                {
+                  lines[NR]=$0
+                }
+
+                END {
+                  last=0
+
+                  for (i=1;i<=NR;i++) {
+
+                    if (wanted[i] && i>last) {
+
+                      print "----------------------------------------"
+
+                      for (j=i;j<=i+6 && j<=NR;j++) {
+                        print lines[j]
+                      }
+
+                      last=i+6
+                    }
+                  }
+                }
+              ' "$LOG" | tail -n 200
+
+            else
+
+              echo "没有上下文可显示。"
+
+            fi
+
+            echo ""
+            echo "========================================"
+            echo "【3】最终构建状态"
+            echo "========================================"
+            echo ""
+
+            if [ -f "$LOG" ]; then
+
+              grep -n -E \
+                "BUILD SUCCEEDED|BUILD FAILED|ARCHIVE FAILED|warning:" \
+                "$LOG" | tail -n 40 || true
+
+            else
+
+              echo "没有 Xcode 构建日志。"
+
+            fi
+
+            echo ""
+            echo "========================================"
+            echo "【4】工程文件检查"
+            echo "========================================"
+            echo ""
+
+            for f in \
+              project.yml \
+              Info.plist \
+              ContentView.swift \
+              Models.swift \
+              ServerListView.swift \
+              SSHSession.swift \
+              TerminalView.swift
+            do
+
+              if [ -f "$f" ]; then
+                echo "正常：$f"
+              else
+                echo "缺失：$f"
+              fi
+
+            done
+
+            echo ""
+            echo "========================================"
+            echo "【5】AppIcon 检查"
+            echo "========================================"
+            echo ""
+
+            if [ -f \
+              "Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
+            ]; then
+
+              echo "AppIcon：存在"
+
+            else
+
+              echo "AppIcon：缺失"
+
+            fi
+
+            echo ""
+            echo "========================================"
+            echo "【6】归档状态"
+            echo "========================================"
+            echo ""
+
+            APP="build/MySSH.xcarchive/Products/Applications/MySSH.app"
+
+            if [ -d "$APP" ]; then
+
+              echo "MySSH.app：存在"
+
+              if [ -f "$APP/Info.plist" ]; then
+
+                echo "Info.plist：存在"
+
+                EXEC=$(
+                  /usr/libexec/PlistBuddy \
+                    -c "Print :CFBundleExecutable" \
+                    "$APP/Info.plist" 2>/dev/null
+                )
+
+                if [ -n "$EXEC" ]; then
+                  echo "CFBundleExecutable：$EXEC"
+                else
+                  echo "CFBundleExecutable：缺失"
+                fi
+
+                if [ -n "$EXEC" ] &&
+                   [ -f "$APP/$EXEC" ]; then
+
+                  echo "主程序：存在"
+                  file "$APP/$EXEC"
+
+                else
+
+                  echo "主程序：缺失"
+
+                fi
+
+              else
+
+                echo "Info.plist：缺失"
+
+              fi
+
+            else
+
+              echo "MySSH.app：不存在"
+              echo "说明：归档没有成功完成。"
+
+            fi
+
+            echo ""
+            echo "========================================"
+            echo "诊断结束"
+            echo "========================================"
+
+          } > "$REPORT"
 
           echo ""
-          echo "【建议】"
-          echo "以上只显示根因相关信息，不再输出几百行原始日志。"
+          echo "========================================"
+          echo "已生成可读错误报告："
+          echo "$REPORT"
+          echo "========================================"
+          echo ""
+
+          cat "$REPORT"
+
+      # ============================================================
+      # 无论成功还是失败，都上传结果
+      # ============================================================
+      - name: Upload build results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: MySSH-构建结果
+          path: |
+            build/MySSH-unsigned.ipa
+            build/MySSH-构建错误报告.txt
+            build/xcodebuild.log
+          if-no-files-found: ignore
+          retention-days: 7

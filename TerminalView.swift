@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct TerminalView: View {
     let serverName: String
@@ -12,6 +13,8 @@ struct TerminalView: View {
     @StateObject private var session: SSHSession
     @State private var commandText = ""
     @State private var shouldAutoScroll = true
+    @State private var showMiniKeyboard = true
+    @FocusState private var commandFieldFocused: Bool
 
     private let bottomID = "BOTTOM_ANCHOR"
 
@@ -50,7 +53,7 @@ struct TerminalView: View {
             Divider()
             commandBar
             Divider()
-            miniKeyboard
+            keyboardPanel
         }
         .background(Color.black.ignoresSafeArea())
         .navigationTitle(serverName)
@@ -86,11 +89,7 @@ struct TerminalView: View {
             Spacer()
 
             Button {
-                if shouldAutoScroll {
-                    shouldAutoScroll = false
-                } else {
-                    shouldAutoScroll = true
-                }
+                shouldAutoScroll.toggle()
             } label: {
                 Text(shouldAutoScroll ? "跟随" : "到底部")
                     .font(.caption)
@@ -144,18 +143,36 @@ struct TerminalView: View {
     }
 
     private var quickCommands: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(store.quickCommands, id: \.self) { command in
-                    Button(command) {
-                        executeCommand(command)
+        HStack(spacing: 6) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(store.quickCommands, id: \.self) { command in
+                        Button(command) {
+                            executeCommand(command)
+                        }
+                        .font(.system(size: 12, design: .monospaced))
+                        .buttonStyle(.bordered)
+                        .contextMenu {
+                            Button {
+                                copyText(command)
+                            } label: {
+                                Label("复制此命令", systemImage: "doc.on.doc")
+                            }
+                        }
                     }
-                    .font(.system(size: 12, design: .monospaced))
-                    .buttonStyle(.bordered)
                 }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+
+            Button {
+                copyText(store.quickCommands.joined(separator: "\n"))
+            } label: {
+                Image(systemName: "doc.on.doc")
+            }
+            .font(.system(size: 13, weight: .semibold))
+            .buttonStyle(.bordered)
+            .accessibilityLabel("复制全部快捷命令")
         }
         .background(Color(.secondarySystemBackground))
     }
@@ -168,6 +185,7 @@ struct TerminalView: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .submitLabel(.send)
+                .focused($commandFieldFocused)
                 .onSubmit {
                     executeCommandText()
                 }
@@ -181,44 +199,98 @@ struct TerminalView: View {
         .background(Color(.systemBackground))
     }
 
-    private var miniKeyboard: some View {
+    private var keyboardPanel: some View {
         VStack(spacing: 6) {
-            HStack(spacing: 6) {
-                key("1") { session.sendKey("1") }
-                key("2") { session.sendKey("2") }
-                key("3") { session.sendKey("3") }
-                key("4") { session.sendKey("4") }
-                key("5") { session.sendKey("5") }
-                key("k") { session.sendKey("k") }
-            }
-
-            HStack(spacing: 6) {
-                key("6") { session.sendKey("6") }
-                key("7") { session.sendKey("7") }
-                key("8") { session.sendKey("8") }
-                key("9") { session.sendKey("9") }
-                key("0") { session.sendKey("0") }
-                key("-") { session.sendKey("-") }
-            }
-
-            HStack(spacing: 6) {
-                key("Ctrl+C") { session.sendCtrlC() }
-                key("ESC") { session.sendEscape() }
-                key("空格") { session.sendSpace() }
-                key("退格") { session.sendBackspace() }
-            }
-
-            HStack(spacing: 6) {
-                key("x-ui", tint: .blue) {
-                    executeCommand("x-ui")
+            HStack(spacing: 10) {
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        showMiniKeyboard.toggle()
+                    }
+                } label: {
+                    Label(
+                        showMiniKeyboard ? "收起" : "展开",
+                        systemImage: showMiniKeyboard ? "chevron.down" : "chevron.up"
+                    )
+                    .font(.system(size: 15, weight: .semibold))
                 }
+                .buttonStyle(.bordered)
 
-                key("q退出", tint: .purple) {
-                    session.sendKey("q")
+                Button {
+                    commandFieldFocused = true
+                } label: {
+                    Label("系统键盘", systemImage: "keyboard")
+                        .font(.system(size: 15, weight: .semibold))
                 }
+                .buttonStyle(.bordered)
+
+                Spacer()
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 5)
+
+            if showMiniKeyboard {
+                HStack(alignment: .top, spacing: 8) {
+                    VStack(spacing: 5) {
+                        HStack(spacing: 5) {
+                            key("1") { session.sendKey("1") }
+                            key("2") { session.sendKey("2") }
+                            key("3") { session.sendKey("3") }
+                            key("4") { session.sendKey("4") }
+                            key("5") { session.sendKey("5") }
+                            key("k") { session.sendKey("k") }
+                        }
+
+                        HStack(spacing: 5) {
+                            key("6") { session.sendKey("6") }
+                            key("7") { session.sendKey("7") }
+                            key("8") { session.sendKey("8") }
+                            key("9") { session.sendKey("9") }
+                            key("0") { session.sendKey("0") }
+                            key("-") { session.sendKey("-") }
+                        }
+
+                        HStack(spacing: 5) {
+                            key("Ctrl+C", tint: .red) {
+                                session.sendCtrlC()
+                            }
+                            key("ESC", tint: .orange) {
+                                session.sendEscape()
+                            }
+                            key("空格") {
+                                session.sendSpace()
+                            }
+                            key("退格") {
+                                session.sendBackspace()
+                            }
+                        }
+
+                        HStack(spacing: 5) {
+                            key("x-ui") {
+                                executeCommand("x-ui")
+                            }
+                            key("q退出", tint: .purple) {
+                                session.sendKey("q")
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+
+                    VStack(spacing: 5) {
+                        key("粘贴", tint: .blue) {
+                            pasteToTerminal()
+                        }
+                        .frame(width: 82, height: 58)
+
+                        key("回车", tint: .blue) {
+                            session.sendKey("\r")
+                        }
+                        .frame(width: 82, height: 112)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 7)
             }
         }
-        .padding(8)
         .background(Color(.secondarySystemBackground))
     }
 
@@ -246,5 +318,16 @@ struct TerminalView: View {
     private func executeCommand(_ command: String) {
         shouldAutoScroll = true
         session.sendCommand(command)
+    }
+
+    private func copyText(_ text: String) {
+        UIPasteboard.general.string = text
+    }
+
+    private func pasteToTerminal() {
+        guard let text = UIPasteboard.general.string, !text.isEmpty else {
+            return
+        }
+        session.sendKey(text)
     }
 }

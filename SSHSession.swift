@@ -25,13 +25,11 @@ class SSHSession: ObservableObject {
     func connect() {
         Task {
             do {
-                // 1. 建立基础 SSH 连接（适配 Citadel 0.7+ 签名）
+                // authenticationMethod 直接传值，不需要闭包大括号
                 let client = try await SSHClient.connect(
                     host: self.host,
                     port: self.port,
-                    authenticationMethod: {
-                        .passwordBased(username: self.username, password: self.password)
-                    },
+                    authenticationMethod: .passwordBased(username: self.username, password: self.password),
                     hostKeyValidator: .acceptAnything(),
                     reconnect: .never
                 )
@@ -39,18 +37,18 @@ class SSHSession: ObservableObject {
                 self.isConnected = true
                 self.history.append(HistoryItem(command: "连接成功", output: "已连接到 \(self.host)，交互通道已就绪..."))
 
-                // 2. 创建用于持续输入的流
+                // 创建输入管道
                 let (stdinStream, continuation) = AsyncStream<ByteBuffer>.makeStream()
                 self.stdinPipe = continuation
 
-                // 3. 启动交互式终端流
+                // 启动交互命令流
                 let stdoutStream = try await client.executeCommandStream(
                     "/bin/sh -i",
                     environment: [:],
                     in: stdinStream
                 )
 
-                // 4. 实时监听远端输出（支持回显、命令结果流）
+                // 读取输出
                 for try await chunk in stdoutStream {
                     let str = String(buffer: chunk)
                     let clean = str.replacingOccurrences(of: "\r", with: "")
@@ -62,7 +60,6 @@ class SSHSession: ObservableObject {
                             let lastIndex = self.history.count - 1
                             self.history[lastIndex].output += clean
                             
-                            // 防止过长文本导致 SwiftUI 卡顿
                             if self.history[lastIndex].output.count > 20000 {
                                 self.history[lastIndex].output = String(self.history[lastIndex].output.suffix(15000))
                             }

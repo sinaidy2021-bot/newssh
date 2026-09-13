@@ -52,7 +52,7 @@ struct TerminalView: View {
                         }
 
                         ForEach(quickCommands) { item in
-                            Button(action: { runCommand(item.cmd) }) {
+                            Button(action: { runCommand(item.cmd, interactive: isInteractiveCommand(item.cmd, name: item.name)) }) {
                                 Text(item.name)
                                     .font(.system(size: 11, weight: .medium))
                                     .padding(.horizontal, 9)
@@ -69,7 +69,7 @@ struct TerminalView: View {
                                 }
 
                                 Button {
-                                    runCommand(item.cmd)
+                                    runCommand(item.cmd, interactive: isInteractiveCommand(item.cmd, name: item.name))
                                 } label: {
                                     Label("执行此命令", systemImage: "play.fill")
                                 }
@@ -327,7 +327,7 @@ struct TerminalView: View {
                                 // x-ui + q退出自动占满整行。
                                 HStack(spacing: 5) {
                                     miniKey("x-ui") {
-                                        runCommand("x-ui")
+                                        runCommand("x-ui", interactive: true)
                                     }
 
                                     miniKey("q退出", color: .purple) {
@@ -671,12 +671,7 @@ struct TerminalView: View {
     // MARK: - 滚动
     private func scrollToBottom(proxy: ScrollViewProxy) {
         DispatchQueue.main.async {
-            withAnimation(.easeOut(duration: 0.15)) {
-                proxy.scrollTo(
-                    "BOTTOM_ANCHOR",
-                    anchor: .bottom
-                )
-            }
+            proxy.scrollTo("BOTTOM_ANCHOR", anchor: .bottom)
         }
     }
 
@@ -703,8 +698,24 @@ struct TerminalView: View {
         inputCommand = ""
     }
 
-    private func runCommand(_ cmd: String) {
-        session.sendCommand(cmd)
+    private func runCommand(_ cmd: String, interactive: Bool = false) {
+        let trimmed = cmd.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if interactive || isInteractiveCommand(trimmed, name: nil) {
+            session.sendInteractiveCommand(trimmed)
+        } else {
+            session.sendCommand(trimmed)
+        }
+    }
+
+    private func isInteractiveCommand(_ cmd: String, name: String?) -> Bool {
+        let value = cmd.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if value == "x-ui" || value == "k" { return true }
+        if let name {
+            let n = name.lowercased()
+            if n.contains("x-ui") || (n.contains("k") && n.contains("菜单")) { return true }
+        }
+        return false
     }
 
     // MARK: - 快捷命令

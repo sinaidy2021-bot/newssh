@@ -39,8 +39,7 @@ struct ServerListView: View {
                                 host: server.host,
                                 port: server.port,
                                 username: server.username,
-                                password: server.password,
-                                store: store
+                                password: server.password
                             )
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
@@ -73,34 +72,53 @@ struct ServerListView: View {
                 NavigationStack {
                     Form {
                         Section("基本信息") {
-                            TextField("名称（如：香港VPS）", text: $newName)
+                            TextField(
+                                "名称（如：香港VPS）",
+                                text: $newName
+                            )
 
-                            TextField("主机 IP / 域名", text: $newHost)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
+                            TextField(
+                                "主机 IP / 域名",
+                                text: $newHost
+                            )
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
 
-                            TextField("端口", text: $newPort)
-                                .keyboardType(.numberPad)
+                            TextField(
+                                "端口",
+                                text: $newPort
+                            )
+                            .keyboardType(.numberPad)
                         }
 
                         Section("认证信息") {
-                            TextField("用户名", text: $newUsername)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
+                            TextField(
+                                "用户名",
+                                text: $newUsername
+                            )
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
 
-                            SecureField("密码", text: $newPassword)
+                            SecureField(
+                                "密码",
+                                text: $newPassword
+                            )
                         }
                     }
                     .navigationTitle("添加服务器")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
+                        ToolbarItem(
+                            placement: .cancellationAction
+                        ) {
                             Button("取消") {
                                 showingAddSheet = false
                             }
                         }
 
-                        ToolbarItem(placement: .confirmationAction) {
+                        ToolbarItem(
+                            placement: .confirmationAction
+                        ) {
                             Button("保存") {
                                 addServer()
                             }
@@ -112,12 +130,25 @@ struct ServerListView: View {
         }
     }
 
+    // MARK: - 表单验证
+
     private var formIsValid: Bool {
-        let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let host = newHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = newName.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+
+        let host = newHost.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+
         let port = Int(newPort) ?? 0
-        return !name.isEmpty && !host.isEmpty && (1...65535).contains(port)
+
+        return !name.isEmpty &&
+               !host.isEmpty &&
+               (1...65535).contains(port)
     }
+
+    // MARK: - 重置表单
 
     private func resetForm() {
         newName = ""
@@ -127,12 +158,25 @@ struct ServerListView: View {
         newPassword = ""
     }
 
-    private func addServer() {
-        guard formIsValid else { return }
+    // MARK: - 添加服务器
 
-        let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let host = newHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        let username = newUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func addServer() {
+        guard formIsValid else {
+            return
+        }
+
+        let name = newName.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+
+        let host = newHost.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+
+        let username = newUsername.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+
         let port = Int(newPort) ?? 22
 
         store.addServer(

@@ -9,7 +9,6 @@ public struct CommandHistoryItem: Identifiable {
     public let id: UUID
     public let command: String
     public var output: String
-
     public init(command: String, output: String) {
         self.id = UUID()
         self.command = command
@@ -33,11 +32,9 @@ final class SSHSession: ObservableObject {
     private var backgroundTask: UIBackgroundTaskIdentifier =.invalid
     private var writeChain: Task<Void, Never>?
 
-    // MARK: - 输出批处理
     private var pendingOutput = ""
     private var flushTask: Task<Void, Never>?
 
-    // MARK: - 多命令队列
     private struct PendingCommand {
         let id: UUID
         let command: String
@@ -53,7 +50,6 @@ final class SSHSession: ObservableObject {
     private let maxOutputCharactersPerCommand = 300_000
     private let maxHistoryItems = 120
 
-    // MARK: - ANSI 清理
     private enum ANSIState { case normal, escape, csi, osc, oscEscape }
     private var ansiState: ANSIState =.normal
 
@@ -79,6 +75,10 @@ final class SSHSession: ObservableObject {
             case.osc:
                 if v == 0x07 { ansiState =.normal }
                 else if v == 0x1B { ansiState =.oscEscape }
+            case.osc:
+                if v == 0x5C || v == 0x07 { ansiState =.normal }
+                else if v == 0x1B { ansiState =.oscEscape }
+                else { ansiState =.osc }
             case.oscEscape:
                 if v == 0x5C || v == 0x07 { ansiState =.normal }
                 else if v == 0x1B { ansiState =.oscEscape }
@@ -88,10 +88,8 @@ final class SSHSession: ObservableObject {
         return result
     }
 
-    // MARK: - 连接
     func connect() {
         guard!isConnected else { return }
-
         flushTask?.cancel()
         flushTask = nil
         pendingOutput = ""
@@ -107,27 +105,18 @@ final class SSHSession: ObservableObject {
                 let client = try await SSHClient.connect(
                     host: self.host,
                     port:.init(integerLiteral: self.port),
-                    authenticationMethod:.passwordBased(
-                        username: self.username,
-                        password: self.password
-                    ),
+                    authenticationMethod:.passwordBased(username: self.username, password: self.password),
                     hostKeyValidator:.acceptAnything(),
                     reconnect:.never
                 )
-
                 self.client = client
                 self.isConnected = true
-
                 let ptyReq = SSHChannelRequestEvent.PseudoTerminalRequest(
-                    wantReply: true,
-                    term: "xterm-256color",
-                    terminalCharacterWidth: 100,
-                    terminalRowHeight: 40,
-                    terminalPixelWidth: 0,
-                    terminalPixelHeight: 0,
+                    wantReply: true, term: "xterm-256color",
+                    terminalCharacterWidth: 100, terminalRowHeight: 40,
+                    terminalPixelWidth: 0, terminalPixelHeight: 0,
                     terminalModes:.init([.ECHO: 0])
                 )
-
                 try await client.withPTY(ptyReq) { [weak self] stream, writer in
                     guard let self = self else { return }
                     self.activeWriter = writer
@@ -142,17 +131,13 @@ final class SSHSession: ObservableObject {
                         }
                     }
                 }
-
-                if self.isConnected {
-                    self.finishConnection(message: nil)
-                }
+                if self.isConnected { self.finishConnection(message: nil) }
             } catch {
-                self.finishConnection(message: "连接断开或异常: \(error.localizedDescription)")
+                self.finishConnection(message: "连接断开: \(error.localizedDescription)")
             }
         }
     }
 
-    // MARK: - 输出接收/批处理
     private func receiveOutput(_ rawText: String) {
         let cleaned = cleanANSI(rawText)
         guard!cleaned.isEmpty else { return }
@@ -164,9 +149,7 @@ final class SSHSession: ObservableObject {
                 await MainActor.run { self?.flushOutput() }
             }
         }
-        if pendingOutput.count >= 500_000 {
-            flushOutput()
-        }
+        if pendingOutput.count >= 500_000 { flushOutput() }
     }
 
     private func flushOutput() {
@@ -190,7 +173,6 @@ final class SSHSession: ObservableObject {
             }
             return
         }
-
         markerBuffer.append(text)
         while let range = markerBuffer.range(of: commandEndMarker) {
             let before = String(markerBuffer[..<range.lowerBound])
@@ -198,7 +180,6 @@ final class SSHSession: ObservableObject {
             completeCurrentCommand()
             markerBuffer = String(markerBuffer[range.upperBound...])
         }
-
         let maxPrefix = min(commandEndMarker.count - 1, markerBuffer.count)
         var splitIndex = markerBuffer.endIndex
         if maxPrefix > 0 {
@@ -254,7 +235,6 @@ final class SSHSession: ObservableObject {
         }
     }
 
-    // MARK: - 发送命令
     func sendCommand(_ command: String) {
         guard isConnected else { return }
         let cmd = command.trimmingCharacters(in:.whitespacesAndNewlines)
@@ -270,61 +250,4 @@ final class SSHSession: ObservableObject {
 
     func sendInteractiveCommand(_ command: String) {
         guard isConnected else { return }
-        let cmd = command.trimmingCharacters(in:.whitespacesAndNewlines)
-        guard!cmd.isEmpty else { return }
-        guard activeInteractiveID == nil else { return }
-        let item = CommandHistoryItem(command: cmd, output: "")
-        appendHistory(item)
-        activeInteractiveID = item.id
-        interactivePromptBuffer = ""
-        enqueueWrite("\(cmd)\n") { [weak self] error in
-            guard let self else { return }
-            if let error {
-                self.handleWriteFailure(id: item.id, error: error)
-                if self.activeInteractiveID == item.id {
-                    self.activeInteractiveID = nil
-                    self.interactivePromptBuffer = ""
-                }
-            }
-        }
-    }
-
-    private func handleWriteFailure(id: UUID, error: Error) {
-        if let index = history.firstIndex(where: { $0.id == id }) {
-            history[index].output = "写入失败：\(error.localizedDescription)"
-        }
-        pendingCommands.removeAll { $0.id == id }
-        if activeInteractiveID == id {
-            activeInteractiveID = nil
-            interactivePromptBuffer = ""
-        }
-    }
-
-    // MARK: - 控制键
-    func sendControl(_ value: String) {
-        guard isConnected else { return }
-        enqueueWrite(value)
-    }
-    func sendCtrlC() { sendControl("\u{03}") }
-    func sendEscape() { sendControl("\u{1B}") }
-    func sendSpace() { sendControl(" ") }
-    func sendBackspace() { sendControl("\u{7F}") }
-
-    // MARK: - 串行写入
-    private func enqueueWrite(_ value: String, completion: ((Error?) -> Void)? = nil) {
-        guard let writer = activeWriter else {
-            completion?(NSError(domain: "MySSH", code: 1, userInfo: [NSLocalizedDescriptionKey: "SSH 写入通道不存在"]))
-            return
-        }
-        let previous = writeChain
-        let task = Task { [weak self] in
-            if let previous { await previous.value }
-            guard let self else { return }
-            do {
-                var buffer = ByteBufferAllocator().buffer(capacity: value.utf8.count)
-                buffer.writeString(value)
-                try await writer.write(buffer)
-                completion?(nil)
-            } catch {
-                completion?(error)
-                self.appendHistory(CommandHistoryItem(command: "system", output: "写入
+        let cmd = command.trimmingCharacters(in:.whitespacesAndNewlines

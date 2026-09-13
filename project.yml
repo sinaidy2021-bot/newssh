@@ -30,9 +30,8 @@ targets:
           - "project.yml"
           - "project.yaml"
           - "*.zip"
+          - "*.log"
           - "打包说明.txt"
-    info:
-      path: Info.plist
     dependencies:
       - package: Citadel
         product: Citadel

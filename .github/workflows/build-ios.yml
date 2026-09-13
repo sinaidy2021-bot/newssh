@@ -101,10 +101,9 @@ jobs:
           echo "APP_PATH=$APP_PATH"
           file "$APP_PATH/MySSH"
 
-      # 新增步骤：无论上一步成功还是失败都会执行（if: always()）。
-      # 把真正的 "error:" 报错行从几千行的原始日志里摘出来，连同上下文一起
-      # 写进 GitHub 的 Job Summary —— 这块内容会直接显示在 Actions 运行页面
-      # 最上方，markdown 渲染好，手机上不用再展开、翻找原始日志。
+      # 关键修正：之前把结果写进了 GITHUB_STEP_SUMMARY（页面上单独一块，
+      # 你这个界面看不到）。现在直接打印到这一步自己的日志里，点开
+      # "提取编译错误详情" 就能马上看到，同时额外附上常见错误的建议方案。
       - name: 提取编译错误详情
         if: always()
         shell: bash
@@ -112,48 +111,72 @@ jobs:
           set +e
           LOG="build/xcodebuild.log"
 
-          {
-            echo "## 🔍 编译错误详情"
+          if [ ! -f "$LOG" ]; then
+            echo "⚠️ 没有找到构建日志文件（$LOG），说明构建在生成日志之前就失败了，请看上一步 Build unsigned iOS app 的原始输出（比如找不到 project.yml、xcodegen 失败等）。"
+            exit 0
+          fi
+
+          # Swift/Xcode 真实报错格式: /path/File.swift:12:34: error: xxxxx
+          ERRORS=$(grep -n -E "error:|BUILD FAILED|fatal error:|Command .* failed" "$LOG")
+
+          if [ -z "$ERRORS" ]; then
+            echo "未匹配到明确的 error: 行，可能是签名/配置/环境问题。"
+            echo "下面是日志末尾 100 行供参考："
+            echo "----------------------------------------"
+            tail -n 100 "$LOG"
+            exit 0
+          fi
+
+          COUNT=$(echo "$ERRORS" | wc -l | tr -d ' ')
+          echo "========================================"
+          echo "🔍 共发现 ${COUNT} 条报错，逐条列出（含上下文和建议方案）"
+          echo "========================================"
+
+          echo "$ERRORS" | while IFS= read -r line; do
+            lineno="${line%%:*}"
+            rest="${line#*:}"
+
             echo ""
-            if [ ! -f "$LOG" ]; then
-              echo "⚠️ 没有找到构建日志文件（$LOG），说明构建在生成日志之前就失败了，请看上一步 **Build unsigned iOS app** 的原始输出（比如找不到 project.yml、xcodegen 失败等）。"
-            else
-              # Swift/Xcode 的真实报错都是这种格式：
-              #   /path/to/File.swift:12:34: error: xxxxx
-              # 这里顺带抓 "BUILD FAILED" 和 "Command ... failed" 这类汇总行
-              ERRORS=$(grep -n -E "error:|BUILD FAILED|fatal error:|Command .* failed" "$LOG")
+            echo "----------------------------------------"
+            echo "📍 报错内容："
+            echo "$rest" | sed 's/^ *//'
+            echo ""
+            echo "上下文（原始日志第 ${lineno} 行附近）："
+            START=$((lineno>2 ? lineno-2 : 1))
+            END=$((lineno+2))
+            sed -n "${START},${END}p" "$LOG" | sed 's/^/    /'
+            echo ""
 
-              if [ -z "$ERRORS" ]; then
-                echo "未匹配到明确的 \`error:\` 行，可能是签名/配置/环境类问题，下面是日志末尾 80 行供参考："
-                echo ""
-                echo '```'
-                tail -n 80 "$LOG"
-                echo '```'
-              else
-                COUNT=$(echo "$ERRORS" | wc -l | tr -d ' ')
-                echo "共匹配到 ${COUNT} 条错误相关行："
-                echo ""
-                echo '```'
-                echo "$ERRORS"
-                echo '```'
+            case "$rest" in
+              *"cannot find"*"in scope"*)
+                echo "💡 建议：报错里提到的名字（变量/函数/类型）在当前文件里找不到定义。检查拼写、是否忘记 import，或定义它的文件没被加进 target。"
+                ;;
+              *"has no member"*)
+                echo "💡 建议：某个类型上调用了一个不存在的属性/方法。检查类型定义，或者是拼写问题、SDK 版本不同导致 API 不存在。"
+                ;;
+              *"ambiguous"*)
+                echo "💡 建议：编译器无法确定表达式类型，通常是重载太多或类型推断失败，试着显式写出类型。"
+                ;;
+              *"no such module"*)
+                echo "💡 建议：缺少某个 Swift Package/依赖库，检查 project.yml 里是否声明了这个包，以及依赖是否正确解析。"
+                ;;
+              *"Multiple commands produce"*)
+                echo "💡 建议：有文件被重复打包了（常见于同名资源或某个 Swift 文件被加了两次），检查 project.yml 的 sources/resources 配置。"
+                ;;
+              *"redeclaration"*|*"invalid redeclaration"*)
+                echo "💡 建议：同一个类型/变量/函数被重复定义了，检查是不是同一个文件被加了两次，或两个文件里写了同名的东西。"
+                ;;
+              *"Requires a provisioning profile"*|*"requires a development team"*)
+                echo "💡 建议：虽然设置了 CODE_SIGNING_ALLOWED=NO，但某个 target 或依赖仍要求签名，检查是不是某个 Swift Package/子 target 单独设置了签名要求。"
+                ;;
+              *)
+                echo "💡 建议：把这条报错完整内容发给我，我可以帮你定位具体是哪一行代码的问题。"
+                ;;
+            esac
+          done
 
-                echo ""
-                echo "### 每条报错的上下文（前后各 2 行）"
-                echo '```'
-                echo "$ERRORS" | cut -d: -f1 | while read -r lineno; do
-                  START=$((lineno>2 ? lineno-2 : 1))
-                  END=$((lineno+2))
-                  echo "--- 原始日志第 ${lineno} 行附近 ---"
-                  sed -n "${START},${END}p" "$LOG"
-                  echo ""
-                done
-                echo '```'
-
-                # 顺便单独存一份精简错误日志，方便下载/搜索
-                echo "$ERRORS" > build/errors-only.log
-              fi
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo ""
+          echo "========================================"
 
       - name: Package IPA
         shell: bash
@@ -200,7 +223,6 @@ jobs:
           cp repo-structure.log diagnostics/ 2>/dev/null || true
           cp xcodegen.log diagnostics/ 2>/dev/null || true
           cp build/xcodebuild.log diagnostics/ 2>/dev/null || true
-          cp build/errors-only.log diagnostics/ 2>/dev/null || true
 
       - name: Upload diagnostics
         if: always()

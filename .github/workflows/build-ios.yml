@@ -1,4 +1,4 @@
-name: Build iOS IPA
+name: iOS 构建
 
 on:
   workflow_dispatch:
@@ -8,227 +8,70 @@ jobs:
     runs-on: macos-15
 
     steps:
-      - name: Checkout
+      - name: 拉取代码
         uses: actions/checkout@v4
 
-      - name: 调试-显示仓库目录结构
-        shell: bash
+      - name: 安装 XcodeGen
+        run: brew install xcodegen
+
+      - name: 生成 Xcode 工程
         run: |
-          set +e
-          {
-            echo "=== pwd ==="
-            pwd
-            echo "=== GITHUB_WORKSPACE 根目录 (深度2) ==="
-            find "$GITHUB_WORKSPACE" -maxdepth 2 2>&1
-            echo "=== 是否存在 project.yml ==="
-            find "$GITHUB_WORKSPACE" -maxdepth 3 -name "project.yml" 2>&1
-          } | tee repo-structure.log
-          exit 0
+          echo "👉 生成 Xcode 工程..."
+          xcodegen generate
+          echo "✅ 工程生成完毕"
 
-      - name: Show Xcode version
+      - name: 解析 Swift Package 依赖
         run: |
-          xcodebuild -version
-          xcode-select -p
+          echo "👉 正在解析拉取 Citadel 等依赖..."
+          xcodebuild -resolvePackageDependencies -project MySSH.xcodeproj -scheme MySSH
 
-      - name: Install XcodeGen
+      - name: 构建真机无签名版本 (IPA)
+        id: build_step
         run: |
-          brew update
-          brew install xcodegen
-
-      - name: Generate Xcode project
-        shell: bash
-        run: |
-          set -uo pipefail
-          {
-            if [ ! -f "project.yml" ]; then
-              echo "❌ 在仓库根目录 $(pwd) 下找不到 project.yml"
-              echo "=== 当前目录内容 ==="
-              ls -la
-              echo "=== 全仓库范围内搜索 project.yml ==="
-              find "$GITHUB_WORKSPACE" -name "project.yml" -print
-              exit 1
-            fi
-
-            xcodegen generate --spec project.yml
-            test -f MySSH.xcodeproj/project.pbxproj
-          } 2>&1 | tee xcodegen.log
-          test "${PIPESTATUS[0]}" -eq 0
-
-      - name: Resolve Swift packages
-        run: |
-          xcodebuild \
-            -project MySSH.xcodeproj \
-            -scheme MySSH \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -resolvePackageDependencies
-
-      - name: Build unsigned iOS app
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf build
-          mkdir -p build
-
+          echo "👉 开始编译真机版本..."
+          
+          set -o pipefail
+          
+          # 更改为 iphoneos sdk，并强制关闭所有签名要求
           xcodebuild \
             -project MySSH.xcodeproj \
             -scheme MySSH \
             -configuration Release \
             -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath build/DerivedData \
+            -derivedDataPath build \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            build 2>&1 | tee build/xcodebuild.log
+            CODE_SIGNING_IDENTITY="" > build_log.txt 2>&1 || BUILD_FAILED=true
 
-          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/MySSH.app"
-
-          if [ ! -d "$APP_PATH" ]; then
-            echo "找不到 MySSH.app，构建失败。"
-            echo "=== build 目录 ==="
-            find build -maxdepth 6 -print
+          if [ "$BUILD_FAILED" = "true" ]; then
+            echo "========================================"
+            echo "❌ 编译失败，提取报错内容："
+            echo "========================================"
+            grep -n -C 3 "error:" build_log.txt | head -n 80 || tail -n 60 build_log.txt
             exit 1
           fi
+          
+          echo "👉 正在打包生成 .ipa 文件..."
+          mkdir -p build/Payload
+          # 将编译出的真机 .app 移动到 Payload 目录
+          mv build/Build/Products/Release-iphoneos/MySSH.app build/Payload/
+          # 压缩成标准 ipa 格式
+          cd build
+          zip -qr MySSH.ipa Payload/
+          echo "🎉 打包成功！"
 
-          if [ ! -f "$APP_PATH/MySSH" ]; then
-            echo "MySSH.app 内没有可执行文件 MySSH。"
-            find "$APP_PATH" -maxdepth 2 -print
-            exit 1
-          fi
-
-          echo "APP_PATH=$APP_PATH"
-          file "$APP_PATH/MySSH"
-
-      # 关键修正：之前把结果写进了 GITHUB_STEP_SUMMARY（页面上单独一块，
-      # 你这个界面看不到）。现在直接打印到这一步自己的日志里，点开
-      # "提取编译错误详情" 就能马上看到，同时额外附上常见错误的建议方案。
-      - name: 提取编译错误详情
-        if: always()
-        shell: bash
-        run: |
-          set +e
-          LOG="build/xcodebuild.log"
-
-          if [ ! -f "$LOG" ]; then
-            echo "⚠️ 没有找到构建日志文件（$LOG），说明构建在生成日志之前就失败了，请看上一步 Build unsigned iOS app 的原始输出（比如找不到 project.yml、xcodegen 失败等）。"
-            exit 0
-          fi
-
-          # Swift/Xcode 真实报错格式: /path/File.swift:12:34: error: xxxxx
-          ERRORS=$(grep -n -E "error:|BUILD FAILED|fatal error:|Command .* failed" "$LOG")
-
-          if [ -z "$ERRORS" ]; then
-            echo "未匹配到明确的 error: 行，可能是签名/配置/环境问题。"
-            echo "下面是日志末尾 100 行供参考："
-            echo "----------------------------------------"
-            tail -n 100 "$LOG"
-            exit 0
-          fi
-
-          COUNT=$(echo "$ERRORS" | wc -l | tr -d ' ')
-          echo "========================================"
-          echo "🔍 共发现 ${COUNT} 条报错，逐条列出（含上下文和建议方案）"
-          echo "========================================"
-
-          echo "$ERRORS" | while IFS= read -r line; do
-            lineno="${line%%:*}"
-            rest="${line#*:}"
-
-            echo ""
-            echo "----------------------------------------"
-            echo "📍 报错内容："
-            echo "$rest" | sed 's/^ *//'
-            echo ""
-            echo "上下文（原始日志第 ${lineno} 行附近）："
-            START=$((lineno>2 ? lineno-2 : 1))
-            END=$((lineno+2))
-            sed -n "${START},${END}p" "$LOG" | sed 's/^/    /'
-            echo ""
-
-            case "$rest" in
-              *"cannot find"*"in scope"*)
-                echo "💡 建议：报错里提到的名字（变量/函数/类型）在当前文件里找不到定义。检查拼写、是否忘记 import，或定义它的文件没被加进 target。"
-                ;;
-              *"has no member"*)
-                echo "💡 建议：某个类型上调用了一个不存在的属性/方法。检查类型定义，或者是拼写问题、SDK 版本不同导致 API 不存在。"
-                ;;
-              *"ambiguous"*)
-                echo "💡 建议：编译器无法确定表达式类型，通常是重载太多或类型推断失败，试着显式写出类型。"
-                ;;
-              *"no such module"*)
-                echo "💡 建议：缺少某个 Swift Package/依赖库，检查 project.yml 里是否声明了这个包，以及依赖是否正确解析。"
-                ;;
-              *"Multiple commands produce"*)
-                echo "💡 建议：有文件被重复打包了（常见于同名资源或某个 Swift 文件被加了两次），检查 project.yml 的 sources/resources 配置。"
-                ;;
-              *"redeclaration"*|*"invalid redeclaration"*)
-                echo "💡 建议：同一个类型/变量/函数被重复定义了，检查是不是同一个文件被加了两次，或两个文件里写了同名的东西。"
-                ;;
-              *"Requires a provisioning profile"*|*"requires a development team"*)
-                echo "💡 建议：虽然设置了 CODE_SIGNING_ALLOWED=NO，但某个 target 或依赖仍要求签名，检查是不是某个 Swift Package/子 target 单独设置了签名要求。"
-                ;;
-              *)
-                echo "💡 建议：把这条报错完整内容发给我，我可以帮你定位具体是哪一行代码的问题。"
-                ;;
-            esac
-          done
-
-          echo ""
-          echo "========================================"
-
-      - name: Package IPA
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf ipa Payload
-          mkdir -p ipa/Payload
-
-          cp -R "build/DerivedData/Build/Products/Release-iphoneos/MySSH.app" ipa/Payload/
-
-          # IPA 本质上是 ZIP，但根目录必须是 Payload/MySSH.app
-          cd ipa
-          /usr/bin/zip -qry ../MySSH.ipa Payload
-
-          cd ..
-          echo "=== IPA 内容检查 ==="
-          /usr/bin/unzip -l MySSH.ipa | head -40
-
-          test -s MySSH.ipa
-
-      - name: Upload IPA
+      - name: 上传失败日志
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: MySSH-IPA
-          path: MySSH.ipa
-          if-no-files-found: error
-          retention-days: 7
+          name: build-failure-log
+          path: build_log.txt
 
-      - name: Upload build log
-        if: always()
+      - name: 上传 IPA 产物
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: MySSH-build-log
-          path: build/xcodebuild.log
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: 汇总所有诊断日志（无论成功失败都会上传）
-        if: always()
-        shell: bash
-        run: |
-          mkdir -p diagnostics
-          cp repo-structure.log diagnostics/ 2>/dev/null || true
-          cp xcodegen.log diagnostics/ 2>/dev/null || true
-          cp build/xcodebuild.log diagnostics/ 2>/dev/null || true
-
-      - name: Upload diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: MySSH-diagnostics
-          path: diagnostics
-          if-no-files-found: ignore
-          retention-days: 7
+          name: MySSH-无签名版
+          path: build/MySSH.ipa

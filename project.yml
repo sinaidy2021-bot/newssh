@@ -1,16 +1,16 @@
-name: MySSH
+name: SSHBlack
 options:
   bundleIdPrefix: com.myssh
   xcodeVersion: "15.0"
 targets:
-  MySSH:
+  SSHBlack:
     type: application
     platform: iOS
     deploymentTarget: "17.0"
     sources: ["."]
-    # 将 Info.plist 加入排除列表，防止被当成普通资源文件
     excludes: ["README.md", "一键构建说明.txt", ".github", "Info.plist"]
     info:
+      path: Info.plist  # 补回这个 XcodeGen 强依赖的字段
       properties:
         CFBundleDisplayName: "MySSH"
         CFBundleShortVersionString: "1.0"
@@ -23,7 +23,6 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.myssh.app
         SWIFT_VERSION: "5.0"
         CODE_SIGNING_ALLOWED: NO
-        # 强制允许 Xcode 自动生成 plist，解决冲突
         GENERATE_INFOPLIST_FILE: YES
 dependencies:
   - package: Citadel

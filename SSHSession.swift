@@ -2,7 +2,6 @@ import Foundation
 import Citadel
 import Combine
 import NIOCore
-import NIOSSH
 
 struct HistoryItem: Identifiable {
     var id = UUID()
@@ -21,12 +20,13 @@ class SSHSession: ObservableObject {
     var password = ""
     
     private var client: SSHClient?
-    private var stdinPipe: AsyncStream<ByteBuffer>.Continuation?
+    // 直接持有 ExecCommandStream 用于写入标准输入
+    private var execStream: ExecCommandStream?
 
     func connect() {
         Task {
             do {
-                // 1. 认证与握手连接
+                // 1. 握手认证
                 let client = try await SSHClient.connect(
                     host: self.host,
                     port: self.port,
@@ -38,28 +38,12 @@ class SSHSession: ObservableObject {
                 self.isConnected = true
                 self.history.append(HistoryItem(command: "连接成功", output: "已连接到 \(self.host)，交互通道已就绪..."))
 
-                // 2. 双向交互流：executeCommandPair 返回 ExecCommandStream 对象
-                let execStream = try await client.executeCommandPair("/bin/sh -i")
-                
-                // 👇 关键修复：不同 Citadel 版本属性名不同，这里用最稳妥的 stdinWriter / stdoutStream
-                // 如果编译仍然报错找不到这两个，请尝试把 .stdinWriter 改成 .input 或 .writer
-                // 如果编译仍然报错找不到 stdoutStream，请尝试把 .stdoutStream 改成 .output 或 .stream
-                let stdinWriter = execStream.stdinWriter
-                let stdoutStream = execStream.stdoutStream
+                // 2. 开启执行流，启动交互 Shell
+                let stream = try await client.executeCommandStream("/bin/sh -i")
+                self.execStream = stream
 
-                // 创建输入流中继管道
-                let (stdinStream, continuation) = AsyncStream<ByteBuffer>.makeStream()
-                self.stdinPipe = continuation
-
-                // 将内部管道的数据持续推送给 Citadel 的输入流
-                Task {
-                    for await chunk in stdinStream {
-                        try? await stdinWriter.write(chunk)
-                    }
-                }
-
-                // 3. 异步读取远程终端回显与输出
-                for try await chunk in stdoutStream {
+                // 3. 异步循环读取远端回显和执行结果
+                for try await chunk in stream {
                     let str = String(buffer: chunk)
                     let clean = str.replacingOccurrences(of: "\r", with: "")
                     
@@ -70,7 +54,6 @@ class SSHSession: ObservableObject {
                             let lastIndex = self.history.count - 1
                             self.history[lastIndex].output += clean
                             
-                            // 防止大量输出撑爆内存和卡死 UI
                             if self.history[lastIndex].output.count > 20000 {
                                 self.history[lastIndex].output = String(self.history[lastIndex].output.suffix(15000))
                             }
@@ -90,7 +73,10 @@ class SSHSession: ObservableObject {
         
         var buffer = ByteBufferAllocator().buffer(capacity: trimmed.utf8.count + 1)
         buffer.writeString(trimmed + "\n")
-        self.stdinPipe?.yield(buffer)
+        
+        Task {
+            try? await self.execStream?.write(buffer)
+        }
 
         self.history.append(HistoryItem(command: trimmed, output: ""))
     }
@@ -98,19 +84,22 @@ class SSHSession: ObservableObject {
     func sendCtrlC() {
         var buffer = ByteBufferAllocator().buffer(capacity: 1)
         buffer.writeBytes([0x03])
-        self.stdinPipe?.yield(buffer)
+        Task {
+            try? await self.execStream?.write(buffer)
+        }
     }
 
     func sendTab() {
         var buffer = ByteBufferAllocator().buffer(capacity: 1)
         buffer.writeBytes([0x09])
-        self.stdinPipe?.yield(buffer)
+        Task {
+            try? await self.execStream?.write(buffer)
+        }
     }
 
     func disconnect() {
-        self.stdinPipe?.finish()
-        self.stdinPipe = nil
         Task {
+            self.execStream = nil
             try? await self.client?.close()
             self.client = nil
             self.isConnected = false

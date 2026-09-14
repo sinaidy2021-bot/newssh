@@ -1,477 +1,1065 @@
-import SwiftUI
+import Foundation
 import UIKit
 import SwiftTerm
+import NIOCore
+import NIOPosix
+import NIOSSH
 
-private struct QuickCmd: Identifiable, Codable, Equatable {
-    let id: UUID
-    var name: String
-    var cmd: String
-
-    init(id: UUID = UUID(), name: String, cmd: String) {
-        self.id = id
-        self.name = name
-        self.cmd = cmd
-    }
-}
-
-private struct CommandLogItem: Identifiable, Equatable {
-    let id = UUID()
-    let time: Date
-    let command: String
-}
-
-struct TerminalView: View {
-    let serverName: String
+struct SSHConnectionInfo: Equatable {
     let host: String
     let port: Int
     let username: String
     let password: String
 
-    @Environment(\.dismiss) private var dismiss
+    let term: String = "xterm-256color"
 
-    @State private var sshTerminal: SshTerminalView?
-    @State private var connectionState = "连接中"
-    @State private var isConnected = false
-    @State private var showMiniKeyboard = true
-    @State private var commandText = ""
-    @State private var commandLogs: [CommandLogItem] = []
-    @State private var quickCommands: [QuickCmd] = TerminalView.loadQuickCommands()
-    @State private var showAddQuickCommand = false
-    @State private var newQuickName = ""
-    @State private var newQuickCommand = ""
-    @State private var showCopiedToast = false
+    let environment: [String: String] = [
+        "LANG": "en_US.UTF-8"
+    ]
+}
 
-    var body: some View {
-        VStack(spacing: 0) {
-            header
+// MARK: - Host Key
 
-            if !commandLogs.isEmpty {
-                commandLogBar
-            }
+private final class AcceptAllHostKeysDelegate:
+    NIOSSHClientServerAuthenticationDelegate {
 
-            terminalArea
-
-            quickCommandBar
-
-            if showMiniKeyboard {
-                miniKeyboard
-            }
-        }
-        .background(Color.black)
-        .navigationBarHidden(true)
-        .sheet(isPresented: $showAddQuickCommand) {
-            addQuickCommandSheet
-        }
-        .overlay(alignment: .center) {
-            if showCopiedToast {
-                Text("已复制")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 10)
-                    .background(.black.opacity(0.85), in: Capsule())
-                    .transition(.opacity)
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-            withAnimation(.easeOut(duration: 0.15)) {
-                showMiniKeyboard = false
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            withAnimation(.easeOut(duration: 0.15)) {
-                showMiniKeyboard = true
-            }
-        }
-        .onAppear {
-            commandLogs.removeAll()
-        }
-        .onDisappear {
-            sshTerminal?.disconnect()
-        }
-    }
-
-    private var header: some View {
-        HStack(spacing: 10) {
-            Button {
-                sshTerminal?.disconnect()
-                dismiss()
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.headline.weight(.semibold))
-                    .frame(width: 36, height: 36)
-            }
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(serverName)
-                    .font(.headline)
-                    .lineLimit(1)
-                Text("\(username)@\(host):\(port)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
-            Spacer()
-
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(isConnected ? Color.green : Color.orange)
-                    .frame(width: 8, height: 8)
-                Text(connectionState)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(isConnected ? .green : .secondary)
-            }
-
-            Button {
-                if let sshTerminal {
-                    sshTerminal.copyAllTerminal()
-                    showToast()
-                }
-            } label: {
-                Image(systemName: "doc.on.doc")
-                    .frame(width: 36, height: 36)
-            }
-            .disabled(sshTerminal == nil)
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 10)
-        .padding(.top, 4)
-        .padding(.bottom, 4)
-        .background(Color(white: 0.07))
-    }
-
-    private var commandLogBar: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(commandLogs.suffix(2)) { item in
-                HStack(spacing: 6) {
-                    Text(timeString(item.time))
-                        .foregroundStyle(.gray)
-                    Text("$")
-                        .foregroundStyle(.green)
-                    Text(item.command)
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                }
-                .font(.system(.caption2, design: .monospaced))
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(Color(white: 0.04))
-    }
-
-    private var terminalArea: some View {
-        TerminalRepresentable(
-            terminal: $sshTerminal,
-            info: SSHConnectionInfo(
-                host: host,
-                port: port,
-                username: username,
-                password: password
-            ),
-            onStatus: { state, connected in
-                connectionState = state
-                isConnected = connected
-            },
-            onCommand: { command, date in
-                commandLogs.append(CommandLogItem(time: date, command: command))
-                if commandLogs.count > 40 {
-                    commandLogs.removeFirst(commandLogs.count - 40)
-                }
-            }
-        )
-        .background(Color.black)
-        .clipped()
-    }
-
-    private var quickCommandBar: some View {
-        VStack(spacing: 0) {
-            Divider().overlay(Color.white.opacity(0.08))
-
-            HStack(spacing: 8) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 7) {
-                        ForEach(quickCommands) { item in
-                            Button {
-                                sshTerminal?.sendText(item.cmd)
-                            } label: {
-                                Text(item.name)
-                                    .font(.caption.weight(.medium))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 12)
-                                    .frame(height: 34)
-                                    .background(Color(white: 0.14), in: Capsule())
-                            }
-                            .contextMenu {
-                                Button {
-                                    UIPasteboard.general.string = item.cmd
-                                    showToast()
-                                } label: {
-                                    Label("复制命令", systemImage: "doc.on.doc")
-                                }
-
-                                Button {
-                                    sshTerminal?.sendText(item.cmd)
-                                } label: {
-                                    Label("执行", systemImage: "play.fill")
-                                }
-
-                                Button(role: .destructive) {
-                                    quickCommands.removeAll { $0.id == item.id }
-                                    saveQuickCommands()
-                                } label: {
-                                    Label("删除", systemImage: "trash")
-                                }
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 2)
-                }
-
-                Button {
-                    showAddQuickCommand = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.headline.weight(.bold))
-                        .frame(width: 34, height: 34)
-                        .background(Color(white: 0.14), in: Circle())
-                }
-
-                Button {
-                    let text = quickCommands.map { "\($0.name) = \($0.cmd)" }.joined(separator: "\n")
-                    UIPasteboard.general.string = text
-                    showToast()
-                } label: {
-                    Image(systemName: "doc.on.doc.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(width: 34, height: 34)
-                        .background(Color(white: 0.14), in: Circle())
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .foregroundStyle(.white)
-
-            HStack(spacing: 8) {
-                TextField("输入命令", text: $commandText)
-                    .textFieldStyle(.plain)
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .frame(height: 40)
-                    .background(Color(white: 0.10), in: RoundedRectangle(cornerRadius: 10))
-                    .onSubmit {
-                        submitCommand()
-                    }
-                    .submitLabel(.send)
-
-                Button("发送") {
-                    submitCommand()
-                }
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.black)
-                .frame(width: 62, height: 40)
-                .background(Color.white, in: RoundedRectangle(cornerRadius: 10))
-            }
-            .padding(.horizontal, 8)
-            .padding(.bottom, 7)
-        }
-        .background(Color(white: 0.055))
-    }
-
-    private var miniKeyboard: some View {
-        VStack(spacing: 6) {
-            HStack {
-                Button("收起") {
-                    withAnimation { showMiniKeyboard = false }
-                }
-                .font(.caption)
-
-                Spacer()
-
-                Button {
-                    showMiniKeyboard = false
-                    DispatchQueue.main.async {
-                        sshTerminal?.becomeFirstResponder()
-                    }
-                } label: {
-                    Label("系统键盘", systemImage: "keyboard")
-                        .font(.caption)
-                }
-            }
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 10)
-
-            HStack(spacing: 6) {
-                keyRow(["1", "2", "3", "4", "5", "k"])
-                largeKeyboardAction("粘贴") {
-                    if let value = UIPasteboard.general.string, !value.isEmpty {
-                        sshTerminal?.sendText(value, submit: false)
-                    }
-                }
-                .frame(width: 76)
-            }
-
-            HStack(spacing: 6) {
-                keyRow(["6", "7", "8", "9", "0", "-"])
-                largeKeyboardAction("回车") {
-                    sshTerminal?.sendSpecial([13])
-                }
-                .frame(width: 76)
-            }
-
-            HStack(spacing: 6) {
-                miniKey("Ctrl+C", width: nil) { sshTerminal?.sendSpecial([3]) }
-                miniKey("ESC", width: nil) { sshTerminal?.sendSpecial([27]) }
-                miniKey("空格", width: nil) { sshTerminal?.sendSpecial([32]) }
-                miniKey("退格", width: nil) { sshTerminal?.sendSpecial([127]) }
-            }
-
-            HStack(spacing: 6) {
-                miniKey("x-ui", width: nil) { sshTerminal?.sendText("x-ui") }
-                miniKey("q退出", width: nil) { sshTerminal?.sendSpecial([113]) }
-            }
-        }
-        .padding(.horizontal, 6)
-        .padding(.top, 6)
-        .padding(.bottom, 7)
-        .background(Color(white: 0.075))
-    }
-
-
-    private func largeKeyboardAction(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity, minHeight: 40)
-                .background(Color(white: 0.20), in: RoundedRectangle(cornerRadius: 8))
-        }
-    }
-
-    private func keyRow(_ keys: [String]) -> some View {
-        HStack(spacing: 6) {
-            ForEach(keys, id: \.self) { key in
-                miniKey(key, width: nil) {
-                    if key == "k" {
-                        sshTerminal?.sendSpecial([107])
-                    } else if let byte = UInt8(key) {
-                        sshTerminal?.sendSpecial([byte])
-                    }
-                }
-            }
-        }
-    }
-
-    private func miniKey(_ title: String, width: CGFloat?, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(.subheadline, design: .monospaced).weight(.medium))
-                .foregroundStyle(.white)
-                .frame(maxWidth: width == nil ? .infinity : width, minHeight: 40)
-                .background(Color(white: 0.16), in: RoundedRectangle(cornerRadius: 8))
-        }
-    }
-
-    private var addQuickCommandSheet: some View {
-        NavigationStack {
-            Form {
-                Section("快捷命令") {
-                    TextField("名称", text: $newQuickName)
-                    TextField("命令", text: $newQuickCommand)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                }
-            }
-            .navigationTitle("添加快捷命令")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") {
-                        showAddQuickCommand = false
-                    }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") {
-                        let name = newQuickName.trimmingCharacters(in: .whitespacesAndNewlines)
-                        let cmd = newQuickCommand.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !name.isEmpty, !cmd.isEmpty else { return }
-                        quickCommands.append(QuickCmd(name: name, cmd: cmd))
-                        saveQuickCommands()
-                        newQuickName = ""
-                        newQuickCommand = ""
-                        showAddQuickCommand = false
-                    }
-                }
-            }
-        }
-    }
-
-    private func submitCommand() {
-        let value = commandText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { return }
-        sshTerminal?.sendText(value)
-        commandText = ""
-    }
-
-    private func showToast() {
-        withAnimation { showCopiedToast = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
-            withAnimation { showCopiedToast = false }
-        }
-    }
-
-    private func timeString(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter.string(from: date)
-    }
-
-    private static func loadQuickCommands() -> [QuickCmd] {
-        if let data = UserDefaults.standard.data(forKey: "MySSH.QuickCommands"),
-           let value = try? JSONDecoder().decode([QuickCmd].self, from: data),
-           !value.isEmpty {
-            return value
-        }
-
-        return [
-            QuickCmd(name: "ls -la", cmd: "ls -la"),
-            QuickCmd(name: "df -h", cmd: "df -h"),
-            QuickCmd(name: "top", cmd: "top -bn1"),
-            QuickCmd(name: "whoami", cmd: "whoami"),
-            QuickCmd(name: "pwd", cmd: "pwd")
-        ]
-    }
-
-    private func saveQuickCommands() {
-        guard let data = try? JSONEncoder().encode(quickCommands) else { return }
-        UserDefaults.standard.set(data, forKey: "MySSH.QuickCommands")
+    func validateHostKey(
+        hostKey: NIOSSHPublicKey,
+        validationCompletePromise: EventLoopPromise<Void>
+    ) {
+        validationCompletePromise.succeed(())
     }
 }
 
-private struct TerminalRepresentable: UIViewRepresentable {
-    @Binding var terminal: SshTerminalView?
-    let info: SSHConnectionInfo
-    let onStatus: (String, Bool) -> Void
-    let onCommand: (String, Date) -> Void
+// MARK: - Password Authentication
 
-    func makeUIView(context: Context) -> SshTerminalView {
-        let view = SshTerminalView(frame: .zero)
-        view.onStatus = onStatus
-        view.onCommandSubmitted = onCommand
-        view.configure(connectionInfo: info)
+private final class PasswordAuthDelegate:
+    NIOSSHClientUserAuthenticationDelegate {
 
-        DispatchQueue.main.async {
-            terminal = view
-        }
+    let username: String
+    let password: String
 
-        return view
+    private var attempted = false
+
+    init(username: String, password: String) {
+        self.username = username
+        self.password = password
     }
 
-    func updateUIView(_ uiView: SshTerminalView, context: Context) {
-        uiView.onStatus = onStatus
-        uiView.onCommandSubmitted = onCommand
+    func nextAuthenticationType(
+        availableMethods: NIOSSHAvailableUserAuthenticationMethods,
+        nextChallengePromise: EventLoopPromise<NIOSSHUserAuthenticationOffer?>
+    ) {
+        guard !attempted,
+              availableMethods.contains(.password)
+        else {
+            nextChallengePromise.succeed(nil)
+            return
+        }
+
+        attempted = true
+
+        nextChallengePromise.succeed(
+            .init(
+                username: username,
+                serviceName: "ssh-connection",
+                offer: .password(
+                    .init(password: password)
+                )
+            )
+        )
+    }
+}
+
+// MARK: - Errors
+
+private enum SSHClientError: Error {
+    case invalidChannelType
+}
+
+// MARK: - Generic SSH Error Handler
+
+private final class SSHErrorHandler: ChannelInboundHandler {
+
+    typealias InboundIn = Any
+
+    private let onError: (Error) -> Void
+
+    init(onError: @escaping (Error) -> Void) {
+        self.onError = onError
+    }
+
+    func errorCaught(
+        context: ChannelHandlerContext,
+        error: Error
+    ) {
+        onError(error)
+        context.close(promise: nil)
+    }
+}
+
+// MARK: - SSH Shell Handler
+
+private final class SSHShellChannelHandler:
+    ChannelInboundHandler {
+
+    typealias InboundIn = SSHChannelData
+
+    private weak var terminalView: SshTerminalView?
+
+    private let term: String
+    private let environment: [String: String]
+
+    private let initialWindowSize: (
+        cols: Int,
+        rows: Int
+    )
+
+    init(
+        terminalView: SshTerminalView?,
+        term: String,
+        environment: [String: String],
+        initialWindowSize: (cols: Int, rows: Int)
+    ) {
+        self.terminalView = terminalView
+        self.term = term
+        self.environment = environment
+        self.initialWindowSize = initialWindowSize
+    }
+
+    func handlerAdded(
+        context: ChannelHandlerContext
+    ) {
+        context.channel
+            .setOption(
+                ChannelOptions.allowRemoteHalfClosure,
+                value: true
+            )
+            .whenFailure {
+                context.fireErrorCaught($0)
+            }
+    }
+
+    func channelActive(
+        context: ChannelHandlerContext
+    ) {
+        let pty = SSHChannelRequestEvent.PseudoTerminalRequest(
+            wantReply: false,
+            term: term,
+            terminalCharacterWidth: max(
+                initialWindowSize.cols,
+                80
+            ),
+            terminalRowHeight: max(
+                initialWindowSize.rows,
+                24
+            ),
+            terminalPixelWidth: 0,
+            terminalPixelHeight: 0,
+            terminalModes: SSHTerminalModes([:])
+        )
+
+        context.triggerUserOutboundEvent(
+            pty,
+            promise: nil
+        )
+
+        for (name, value) in environment {
+            context.triggerUserOutboundEvent(
+                SSHChannelRequestEvent.EnvironmentRequest(
+                    wantReply: false,
+                    name: name,
+                    value: value
+                ),
+                promise: nil
+            )
+        }
+
+        context.triggerUserOutboundEvent(
+            SSHChannelRequestEvent.ShellRequest(
+                wantReply: false
+            ),
+            promise: nil
+        )
+    }
+
+    func channelRead(
+        context: ChannelHandlerContext,
+        data: NIOAny
+    ) {
+        let payload = unwrapInboundIn(data)
+
+        guard case .byteBuffer(var buffer) = payload.data else {
+            return
+        }
+
+        let readable = buffer.readableBytes
+
+        guard readable > 0 else {
+            return
+        }
+
+        guard let bytes = buffer.readBytes(
+            length: readable
+        ) else {
+            return
+        }
+
+        let chunkSize = 4096
+        var index = 0
+
+        while index < bytes.count {
+
+            let end = min(
+                index + chunkSize,
+                bytes.count
+            )
+
+            let chunk = Array(
+                bytes[index..<end]
+            )
+
+            DispatchQueue.main.async { [weak terminalView] in
+                terminalView?.feed(
+                    byteArray: chunk
+                )
+            }
+
+            index = end
+        }
+    }
+
+    func userInboundEventTriggered(
+        context: ChannelHandlerContext,
+        event: Any
+    ) {
+        if let status =
+            event as? SSHChannelRequestEvent.ExitStatus {
+
+            DispatchQueue.main.async {
+                [weak terminalView] in
+
+                terminalView?.connectionMessage(
+                    "SSH 会话结束，状态码 \(status.exitStatus)"
+                )
+            }
+
+        } else if let signal =
+                    event as? SSHChannelRequestEvent.ExitSignal {
+
+            DispatchQueue.main.async {
+                [weak terminalView] in
+
+                terminalView?.connectionMessage(
+                    "SSH 会话结束：\(signal.signalName)"
+                )
+            }
+
+        } else {
+
+            context.fireUserInboundEventTriggered(
+                event
+            )
+        }
+    }
+}
+
+// MARK: - SSH Connection
+
+private final class SSHConnection {
+
+    private weak var terminalView: SshTerminalView?
+
+    private let info: SSHConnectionInfo
+
+    private let initialWindowSize: (
+        cols: Int,
+        rows: Int
+    )
+
+    private var group: EventLoopGroup?
+
+    private var channel: Channel?
+
+    private var sessionChannel: Channel?
+
+    init(
+        terminalView: SshTerminalView,
+        info: SSHConnectionInfo,
+        initialWindowSize: (cols: Int, rows: Int)
+    ) {
+        self.terminalView = terminalView
+        self.info = info
+        self.initialWindowSize = initialWindowSize
+    }
+
+    func connect() {
+
+        let group =
+            MultiThreadedEventLoopGroup(
+                numberOfThreads: 1
+            )
+
+        self.group = group
+
+        let auth =
+            PasswordAuthDelegate(
+                username: info.username,
+                password: info.password
+            )
+
+        let serverAuth =
+            AcceptAllHostKeysDelegate()
+
+        let bootstrap =
+            ClientBootstrap(group: group)
+
+            .channelInitializer {
+                [weak self] channel in
+
+                channel.eventLoop.makeCompletedFuture {
+
+                    guard let self else {
+                        return
+                    }
+
+                    let sshHandler =
+                        NIOSSHHandler(
+                            role: .client(
+                                .init(
+                                    userAuthDelegate: auth,
+                                    serverAuthDelegate: serverAuth
+                                )
+                            ),
+                            allocator: channel.allocator,
+                            inboundChildChannelInitializer: nil
+                        )
+
+                    try channel.pipeline
+                        .syncOperations
+                        .addHandler(
+                            sshHandler
+                        )
+
+                    try channel.pipeline
+                        .syncOperations
+                        .addHandler(
+                            SSHErrorHandler {
+                                [weak self] error in
+
+                                self?.handleError(
+                                    error
+                                )
+                            }
+                        )
+                }
+            }
+
+            .channelOption(
+                ChannelOptions.socket(
+                    SocketOptionLevel(SOL_SOCKET),
+                    SO_REUSEADDR
+                ),
+                value: 1
+            )
+
+            .channelOption(
+                ChannelOptions.socket(
+                    SocketOptionLevel(IPPROTO_TCP),
+                    TCP_NODELAY
+                ),
+                value: 1
+            )
+
+        bootstrap
+            .connect(
+                host: info.host,
+                port: info.port
+            )
+            .whenComplete {
+                [weak self] result in
+
+                guard let self else {
+                    return
+                }
+
+                switch result {
+
+                case .failure(let error):
+
+                    self.handleError(error)
+                    self.shutdownGroup()
+
+                case .success(let channel):
+
+                    self.channel = channel
+
+                    self.createSessionChannel(
+                        on: channel
+                    )
+                }
+            }
+    }
+
+    // MARK: Send
+
+    func send(_ data: Data) {
+
+        guard !data.isEmpty,
+              let sessionChannel
+        else {
+            return
+        }
+
+        sessionChannel.eventLoop.execute {
+
+            var buffer =
+                sessionChannel.allocator.buffer(
+                    capacity: data.count
+                )
+
+            buffer.writeBytes(data)
+
+            let payload =
+                SSHChannelData(
+                    type: .channel,
+                    data: .byteBuffer(buffer)
+                )
+
+            sessionChannel.writeAndFlush(
+                payload,
+                promise: nil
+            )
+        }
+    }
+
+    // MARK: Resize
+
+    func resize(
+        cols: Int,
+        rows: Int
+    ) {
+
+        guard cols > 0,
+              rows > 0,
+              let sessionChannel
+        else {
+            return
+        }
+
+        sessionChannel.eventLoop.execute {
+
+            let event =
+                SSHChannelRequestEvent.WindowChangeRequest(
+                    terminalCharacterWidth: cols,
+                    terminalRowHeight: rows,
+                    terminalPixelWidth: 0,
+                    terminalPixelHeight: 0
+                )
+
+            sessionChannel.triggerUserOutboundEvent(
+                event,
+                promise: nil
+            )
+        }
+    }
+
+    // MARK: Disconnect
+
+    func disconnect() {
+
+        if let channel {
+
+            channel.closeFuture.whenComplete {
+                [weak self] _ in
+
+                self?.shutdownGroup()
+            }
+
+            channel.close(
+                promise: nil
+            )
+
+        } else {
+
+            shutdownGroup()
+        }
+    }
+
+    // MARK: Create Session
+
+    private func createSessionChannel(
+        on channel: Channel
+    ) {
+
+        channel.pipeline
+            .handler(
+                type: NIOSSHHandler.self
+            )
+            .whenComplete {
+                [weak self] result in
+
+                guard let self else {
+                    return
+                }
+
+                switch result {
+
+                case .failure(let error):
+
+                    self.handleError(error)
+
+                case .success(let sshHandler):
+
+                    let promise =
+                        channel.eventLoop
+                            .makePromise(
+                                of: Channel.self
+                            )
+
+                    sshHandler.createChannel(
+                        promise,
+                        channelType: .session
+                    ) {
+                        [weak self]
+                        childChannel,
+                        channelType in
+
+                        guard let self,
+                              channelType == .session
+                        else {
+
+                            return channel.eventLoop
+                                .makeFailedFuture(
+                                    SSHClientError
+                                        .invalidChannelType
+                                )
+                        }
+
+                        return childChannel
+                            .eventLoop
+                            .makeCompletedFuture {
+
+                                let handler =
+                                    SSHShellChannelHandler(
+                                        terminalView:
+                                            self.terminalView,
+                                        term:
+                                            self.info.term,
+                                        environment:
+                                            self.info.environment,
+                                        initialWindowSize:
+                                            self.initialWindowSize
+                                    )
+
+                                let sync =
+                                    childChannel
+                                        .pipeline
+                                        .syncOperations
+
+                                try sync.addHandler(
+                                    handler
+                                )
+
+                                try sync.addHandler(
+                                    SSHErrorHandler {
+                                        [weak self] error in
+
+                                        self?.handleError(
+                                            error
+                                        )
+                                    }
+                                )
+                            }
+                    }
+
+                    promise.futureResult
+                        .whenComplete {
+                            [weak self] result in
+
+                            guard let self else {
+                                return
+                            }
+
+                            switch result {
+
+                            case .failure(let error):
+
+                                self.handleError(error)
+
+                            case .success(
+                                let childChannel
+                            ):
+
+                                self.sessionChannel =
+                                    childChannel
+
+                                self.sendInitialResize()
+
+                                DispatchQueue.main.async {
+                                    [weak self] in
+
+                                    self?.terminalView?
+                                        .connectionSucceeded()
+                                }
+                            }
+                        }
+                }
+            }
+    }
+
+    // MARK: Initial Resize
+
+    private func sendInitialResize() {
+
+        DispatchQueue.main.async {
+            [weak self] in
+
+            guard let self,
+                  let terminal =
+                    self.terminalView?
+                        .getTerminal()
+            else {
+                return
+            }
+
+            self.resize(
+                cols: terminal.cols,
+                rows: terminal.rows
+            )
+        }
+    }
+
+    // MARK: Error
+
+    private func handleError(
+        _ error: Error
+    ) {
+
+        DispatchQueue.main.async {
+            [weak self] in
+
+            self?.terminalView?
+                .connectionFailed(
+                    error.localizedDescription
+                )
+        }
+    }
+
+    // MARK: Shutdown
+
+    private func shutdownGroup() {
+
+        guard let group else {
+            return
+        }
+
+        self.group = nil
+
+        group.shutdownGracefully {
+            _ in
+        }
+    }
+}
+
+// MARK: - SwiftTerm SSH Terminal
+
+final class SshTerminalView:
+    SwiftTerm.TerminalView,
+    SwiftTerm.TerminalViewDelegate {
+
+    private var sshConnection:
+        SSHConnection?
+
+    private var configuredInfo:
+        SSHConnectionInfo?
+
+    private var inputBuffer = ""
+
+    var onStatus:
+        ((String, Bool) -> Void)?
+
+    var onCommandSubmitted:
+        ((String, Date) -> Void)?
+
+    // MARK: Initializer
+
+    override init(frame: CGRect) {
+
+        super.init(frame: frame)
+
+        terminalDelegate = self
+
+        configureNativeColors()
+
+        allowMouseReporting = true
+
+        optionAsMetaKey = false
+
+        backspaceSendsControlH = false
+
+        backgroundColor = .black
+    }
+
+    required init?(
+        coder: NSCoder
+    ) {
+
+        super.init(coder: coder)
+
+        terminalDelegate = self
+
+        configureNativeColors()
+
+        allowMouseReporting = true
+
+        optionAsMetaKey = false
+
+        backspaceSendsControlH = false
+
+        backgroundColor = .black
+    }
+
+    deinit {
+        sshConnection?.disconnect()
+    }
+
+    // MARK: Connect
+
+    func configure(
+        connectionInfo: SSHConnectionInfo
+    ) {
+
+        guard configuredInfo != connectionInfo
+        else {
+            return
+        }
+
+        configuredInfo =
+            connectionInfo
+
+        sshConnection?.disconnect()
+
+        sshConnection = nil
+
+        inputBuffer = ""
+
+        getTerminal().cmdReset()
+
+        onStatus?(
+            "连接中",
+            false
+        )
+
+        let terminal =
+            getTerminal()
+
+        let cols =
+            terminal.cols > 0
+            ? terminal.cols
+            : 80
+
+        let rows =
+            terminal.rows > 0
+            ? terminal.rows
+            : 24
+
+        let connection =
+            SSHConnection(
+                terminalView: self,
+                info: connectionInfo,
+                initialWindowSize: (
+                    cols: cols,
+                    rows: rows
+                )
+            )
+
+        sshConnection =
+            connection
+
+        connection.connect()
+
+        DispatchQueue.main.async {
+            [weak self] in
+
+            self?.becomeFirstResponder()
+        }
+    }
+
+    // MARK: Text Input
+
+    func sendText(
+        _ text: String,
+        submit: Bool = true
+    ) {
+
+        var value = text
+
+        if submit,
+           !value.hasSuffix("\n"),
+           !value.hasSuffix("\r") {
+
+            value += "\n"
+        }
+
+        sendRaw(
+            Data(value.utf8)
+        )
+    }
+
+    func sendRaw(
+        _ data: Data
+    ) {
+
+        recordInput(data)
+
+        sshConnection?.send(data)
+    }
+
+    func sendSpecial(
+        _ bytes: [UInt8]
+    ) {
+
+        sendRaw(
+            Data(bytes)
+        )
+    }
+
+    // MARK: Disconnect
+
+    func disconnect() {
+
+        sshConnection?.disconnect()
+
+        sshConnection = nil
+
+        onStatus?(
+            "未连接",
+            false
+        )
+    }
+
+    // MARK: Copy
+
+    func copyAllTerminal() {
+
+        selectAll(nil)
+
+        copy(nil)
+    }
+
+    // MARK: Connection State
+
+    func connectionSucceeded() {
+
+        let time =
+            Self.clockString(
+                Date()
+            )
+
+        feed(
+            text:
+                "\n[\(time)] SSH 已连接\n"
+        )
+
+        onStatus?(
+            "已连接",
+            true
+        )
+    }
+
+    func connectionFailed(
+        _ message: String
+    ) {
+
+        let time =
+            Self.clockString(
+                Date()
+            )
+
+        feed(
+            text:
+                "\n[\(time)] SSH 连接失败：\(message)\n"
+        )
+
+        onStatus?(
+            "连接失败",
+            false
+        )
+    }
+
+    func connectionMessage(
+        _ message: String
+    ) {
+
+        let time =
+            Self.clockString(
+                Date()
+            )
+
+        feed(
+            text:
+                "\n[\(time)] \(message)\n"
+        )
+
+        onStatus?(
+            "未连接",
+            false
+        )
+    }
+
+    // MARK: Input Recording
+
+    private func recordInput(
+        _ data: Data
+    ) {
+
+        for byte in data {
+
+            switch byte {
+
+            case 10, 13:
+
+                let command =
+                    inputBuffer
+                        .trimmingCharacters(
+                            in: .whitespacesAndNewlines
+                        )
+
+                if !command.isEmpty {
+
+                    onCommandSubmitted?(
+                        command,
+                        Date()
+                    )
+                }
+
+                inputBuffer = ""
+
+            case 8, 127:
+
+                if !inputBuffer.isEmpty {
+                    inputBuffer.removeLast()
+                }
+
+            case 32...126:
+
+                if let scalar =
+                    UnicodeScalar(
+                        Int(byte)
+                    ) {
+
+                    inputBuffer.append(
+                        Character(
+                            String(scalar)
+                        )
+                    )
+                }
+
+            default:
+                break
+            }
+        }
+    }
+
+    // MARK: Time
+
+    private static func clockString(
+        _ date: Date
+    ) -> String {
+
+        let formatter =
+            DateFormatter()
+
+        formatter.dateFormat =
+            "HH:mm:ss"
+
+        return formatter.string(
+            from: date
+        )
+    }
+
+    // MARK: SwiftTerm TerminalViewDelegate
+
+    func scrolled(
+        source: SwiftTerm.TerminalView,
+        position: Double
+    ) {
+    }
+
+    func setTerminalTitle(
+        source: SwiftTerm.TerminalView,
+        title: String
+    ) {
+    }
+
+    func sizeChanged(
+        source: SwiftTerm.TerminalView,
+        newCols: Int,
+        newRows: Int
+    ) {
+
+        sshConnection?.resize(
+            cols: newCols,
+            rows: newRows
+        )
+    }
+
+    func send(
+        source: SwiftTerm.TerminalView,
+        data: ArraySlice<UInt8>
+    ) {
+
+        let bytes =
+            Array(data)
+
+        let value =
+            Data(bytes)
+
+        recordInput(value)
+
+        sshConnection?.send(value)
+    }
+
+    func clipboardCopy(
+        source: SwiftTerm.TerminalView,
+        content: Data
+    ) {
+
+        UIPasteboard.general.string =
+            String(
+                bytes: content,
+                encoding: .utf8
+            )
+    }
+
+    func hostCurrentDirectoryUpdate(
+        source: SwiftTerm.TerminalView,
+        directory: String?
+    ) {
+    }
+
+    func requestOpenLink(
+        source: SwiftTerm.TerminalView,
+        link: String,
+        params: [String: String]
+    ) {
+
+        guard let url =
+            URL(string: link)
+        else {
+            return
+        }
+
+        UIApplication.shared.open(
+            url
+        )
+    }
+
+    func rangeChanged(
+        source: SwiftTerm.TerminalView,
+        startY: Int,
+        endY: Int
+    ) {
     }
 }

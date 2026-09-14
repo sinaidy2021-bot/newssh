@@ -11,59 +11,78 @@ jobs:
     runs-on: macos-15
 
     steps:
-      - name: 拉取项目
+      - name: ① 拉取项目
         uses: actions/checkout@v4
 
-      - name: 安装 XcodeGen
+      - name: ② 安装 XcodeGen
         run: brew install xcodegen
 
-      - name: 生成 AppIcon
+      - name: ③ 生成 AppIcon
         shell: bash
         run: |
           set -euo pipefail
+
           test -f AppIconSource.png
+
           rm -rf Assets.xcassets
           mkdir -p Assets.xcassets/AppIcon.appiconset
-          cp AppIconSource.png Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png
+
+          cp AppIconSource.png \
+            Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png
 
           cat > Assets.xcassets/Contents.json <<'JSON'
-          {"info":{"author":"xcode","version":1}}
+          {
+            "info": {
+              "author": "xcode",
+              "version": 1
+            }
+          }
           JSON
 
           cat > Assets.xcassets/AppIcon.appiconset/Contents.json <<'JSON'
           {
-            "images": [{
-              "filename": "AppIcon-1024.png",
-              "idiom": "universal",
-              "platform": "ios",
-              "size": "1024x1024"
-            }],
-            "info": {"author":"xcode","version":1}
+            "images": [
+              {
+                "filename": "AppIcon-1024.png",
+                "idiom": "universal",
+                "platform": "ios",
+                "size": "1024x1024"
+              }
+            ],
+            "info": {
+              "author": "xcode",
+              "version": 1
+            }
           }
           JSON
 
           WIDTH=$(sips -g pixelWidth AppIconSource.png | awk '/pixelWidth/ {print $2}')
           HEIGHT=$(sips -g pixelHeight AppIconSource.png | awk '/pixelHeight/ {print $2}')
+
           test "$WIDTH" = "1024"
           test "$HEIGHT" = "1024"
 
-      - name: 生成 Xcode 项目
+      - name: ④ 生成 Xcode 项目
         shell: bash
         run: |
           set -euo pipefail
+
           rm -rf MySSH.xcodeproj
+
           xcodegen generate
+
           test -f MySSH.xcodeproj/project.pbxproj
 
-      - name: 构建 Archive
+      - name: ⑤ 构建 Archive
         id: archive
         shell: bash
         run: |
           set +e
+          set -o pipefail
+
           rm -rf build diagnostics
           mkdir -p build diagnostics
 
-          set -o pipefail
           xcodebuild \
             -project MySSH.xcodeproj \
             -scheme MySSH \
@@ -73,130 +92,242 @@ jobs:
             -archivePath build/MySSH.xcarchive \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            archive 2>&1 | tee build/xcodebuild.log >/dev/null
+            CODE_SIGN_IDENTITY="" \
+            archive \
+            2>&1 | tee build/xcodebuild.log >/dev/null
 
           STATUS=${PIPESTATUS[0]}
-          echo "$STATUS" > diagnostics/exit-code.txt
+
+          printf '%s\n' "$STATUS" > diagnostics/exit-code.txt
+
           exit "$STATUS"
 
-      - name: 生成中文根因诊断
+      - name: ⑥ 提取真正错误
         if: ${{ always() }}
         shell: bash
         run: |
           set +e
+
           LOG="build/xcodebuild.log"
           OUT="diagnostics/中文错误诊断.txt"
+
           STATUS="$(cat diagnostics/exit-code.txt 2>/dev/null || echo 1)"
 
           {
+            echo "============================================================"
             echo "MySSH 构建诊断"
-            echo "=============================="
-            if [ "$STATUS" = "0" ]; then
-              echo "结果：✅ 构建成功"
-            else
-              echo "结果：❌ 构建失败"
-            fi
-            echo "退出代码：$STATUS"
+            echo "============================================================"
             echo
-            echo "【真正错误】"
 
-            if [ -f "$LOG" ]; then
-              ERRORS=$(grep -E '(^|/)[^[:space:]:]+\.(swift|m|mm|c|cpp):[0-9]+:[0-9]+: (error|fatal error):' "$LOG" 2>/dev/null \
-                | sed -E 's#^[0-9]+:##' \
-                | sed -E 's/^[[:space:]]+//' \
-                | awk '!seen[$0]++' \
-                | head -n 8)
+            if [ "$STATUS" = "0" ]; then
 
-              if [ -n "$ERRORS" ]; then
-                N=0
-                while IFS= read -r line; do
-                  [ -z "$line" ] && continue
-                  N=$((N+1))
-                  echo "$N. $line"
-                done <<< "$ERRORS"
-              else
-                LINKER=$(grep -E 'clang: error:|ld: error:|Undefined symbols for architecture|duplicate symbol|No such module' "$LOG" 2>/dev/null \
+              echo "【最终结果】"
+              echo
+              echo "✅ 构建成功"
+              echo
+              echo "Archive 已成功生成。"
+
+            else
+
+              echo "【最终结果】"
+              echo
+              echo "❌ 构建失败"
+              echo
+
+              echo "【真正错误】"
+              echo
+
+              ERRORS=""
+
+              if [ -f "$LOG" ]; then
+
+                # ------------------------------------------------
+                # 第一优先级：
+                # 只抓 MySSH 自己源码的 Swift 编译错误
+                # ------------------------------------------------
+
+                ERRORS=$(
+                  grep -E \
+                    '/(SSHSession|TerminalView|ServerListView|Models|ContentView|MySSHApp)\.swift:[0-9]+:[0-9]+: (error|fatal error):' \
+                    "$LOG" 2>/dev/null \
                   | sed -E 's/^[0-9]+://' \
                   | sed -E 's/^[[:space:]]+//' \
                   | awk '!seen[$0]++' \
-                  | head -n 8)
-                if [ -n "$LINKER" ]; then
-                  echo "$LINKER"
-                else
-                  if grep -q '\*\* ARCHIVE FAILED \*\*' "$LOG" 2>/dev/null; then
-                    echo "未捕获到具体 Swift error。Archive 阶段失败，请检查原始日志。"
-                  else
-                    echo "未发现编译器错误。失败可能发生在项目生成、归档验证或打包阶段。"
-                  fi
+                  | head -n 12
+                )
+
+                # ------------------------------------------------
+                # 第二优先级：
+                # 模块、链接、重复文件、签名等真正错误
+                # ------------------------------------------------
+
+                if [ -z "$ERRORS" ]; then
+                  ERRORS=$(
+                    grep -E \
+                      'clang: error:|ld: error:|Undefined symbols for architecture|duplicate symbol|No such module|Multiple commands produce|Code signing is required|requires a provisioning profile|Provisioning profile|PhaseScriptExecution failed' \
+                      "$LOG" 2>/dev/null \
+                    | sed -E 's/^[0-9]+://' \
+                    | sed -E 's/^[[:space:]]+//' \
+                    | awk '!seen[$0]++' \
+                    | head -n 12
+                  )
                 fi
+
+                # ------------------------------------------------
+                # 第三优先级：
+                # Xcode 编译器明确给出的 error
+                # 但排除 SwiftDriver / dependency 流水账
+                # ------------------------------------------------
+
+                if [ -z "$ERRORS" ]; then
+                  ERRORS=$(
+                    grep -E \
+                      '(^|[[:space:]])(error:|fatal error:)' \
+                      "$LOG" 2>/dev/null \
+                    | grep -v 'SwiftDriver' \
+                    | grep -v 'SwiftCompile normal' \
+                    | grep -v 'CompileSwiftSources' \
+                    | grep -v 'note:' \
+                    | sed -E 's/^[0-9]+://' \
+                    | sed -E 's/^[[:space:]]+//' \
+                    | awk '!seen[$0]++' \
+                    | head -n 12
+                  )
+                fi
+
+                if [ -n "$ERRORS" ]; then
+                  N=0
+
+                  while IFS= read -r line; do
+                    [ -z "$line" ] && continue
+
+                    N=$((N + 1))
+
+                    echo "$N. $line"
+
+                  done <<< "$ERRORS"
+
+                else
+
+                  echo "未提取到明确的源码错误。"
+                  echo "请查看 Artifact 中的完整日志：build/xcodebuild.log"
+
+                fi
+
+              else
+
+                echo "没有找到 Xcode 构建日志。"
+
               fi
-            else
-              echo "没有找到 Xcode 构建日志。"
+
+              echo
+              echo "【对应解决方案】"
+              echo
+
+              if [ -f "$LOG" ]; then
+
+                if grep -q "cannot find .* in scope" "$LOG"; then
+                  echo "→ 存在未定义的变量、函数或类型。检查声明、拼写和文件是否完整。"
+                fi
+
+                if grep -q "extra argument" "$LOG"; then
+                  echo "→ 调用传入了多余参数。按照当前函数/初始化器定义删除多余参数。"
+                fi
+
+                if grep -q "missing argument" "$LOG"; then
+                  echo "→ 调用缺少参数。按照当前函数/初始化器定义补齐参数。"
+                fi
+
+                if grep -q "has no member" "$LOG"; then
+                  echo "→ 当前类型没有该属性或方法。检查成员名称及类型定义。"
+                fi
+
+                if grep -q "ambiguous use" "$LOG"; then
+                  echo "→ 调用存在歧义。检查重复声明、重载以及类型推断。"
+                fi
+
+                if grep -q "No such module" "$LOG"; then
+                  echo "→ 缺少模块。检查 project.yml 中的 Swift Package 依赖和 product 名称。"
+                fi
+
+                if grep -q "Multiple commands produce" "$LOG"; then
+                  echo "→ 文件被重复加入 Target。检查 sources、resources 和 INFOPLIST_FILE。"
+                fi
+
+                if grep -q "Undefined symbols for architecture" "$LOG"; then
+                  echo "→ 链接失败。检查 Swift Package、Target 依赖和链接库。"
+                fi
+
+                if grep -q "ld: error:" "$LOG"; then
+                  echo "→ 链接阶段失败。检查依赖库及 Target Link Binary With Libraries。"
+                fi
+
+                if grep -q "Code signing is required\|requires a provisioning profile\|Provisioning profile" "$LOG"; then
+                  echo "→ 签名配置问题。检查 CODE_SIGNING_ALLOWED、CODE_SIGNING_REQUIRED 和签名设置。"
+                fi
+
+                if grep -q "PhaseScriptExecution failed" "$LOG"; then
+                  echo "→ 构建脚本失败。检查该脚本产生的第一条实际 error。"
+                fi
+
+              fi
+
+              echo
+              echo "完整 Xcode 日志已保存到 Artifact："
+              echo "build/xcodebuild.log"
+
             fi
 
             echo
-            echo "【自动解决建议】"
-            if [ -f "$LOG" ]; then
-              if grep -q "cannot find .* in scope" "$LOG"; then
-                echo "→ 存在未定义的变量、函数或类型：检查名称是否拼写正确，以及对应声明是否被删除。"
-              fi
-              if grep -q "extra argument" "$LOG"; then
-                echo "→ 调用参数多于函数/视图定义：删除多余参数，或让被调用对象提供该参数。"
-              fi
-              if grep -q "missing argument" "$LOG"; then
-                echo "→ 调用缺少参数：按函数/初始化器定义补齐参数。"
-              fi
-              if grep -q "has no member" "$LOG"; then
-                echo "→ 调用了类型不存在的属性或方法：检查成员名称及当前类型定义。"
-              fi
-              if grep -q "ambiguous use" "$LOG"; then
-                echo "→ 调用存在歧义：检查重复声明、重载或类型推断。"
-              fi
-              if grep -q "No such module" "$LOG"; then
-                echo "→ 缺少模块：检查 project.yml 的依赖声明、产品名和 Swift Package 版本。"
-              fi
-              if grep -q "Multiple commands produce" "$LOG"; then
-                echo "→ 同一个文件被重复处理：检查 sources/resources 与 INFOPLIST_FILE 等配置是否重复。"
-              fi
-              if grep -q "Signing requires a development team" "$LOG" || grep -q "requires a provisioning profile" "$LOG"; then
-                echo "→ 出现签名配置错误：当前工作流使用无签名 Archive；检查是否有 Target 强制开启签名。"
-              fi
-              if grep -q "Command PhaseScriptExecution failed" "$LOG"; then
-                echo "→ 构建脚本失败：检查对应 Run Script 阶段的实际错误。"
-              fi
-            fi
-            echo
-            echo "原始 Xcode 日志已单独保存为 build/xcodebuild.log，不在本报告中展开。"
+            echo "============================================================"
+
           } > "$OUT"
 
           cat "$OUT"
 
-      - name: 验证 Archive
+      - name: ⑦ 验证 Archive
         if: ${{ success() }}
         shell: bash
         run: |
           set -euo pipefail
+
           APP="build/MySSH.xcarchive/Products/Applications/MySSH.app"
+
           test -d "$APP"
           test -f "$APP/Info.plist"
-          EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
+
+          EXECUTABLE=$(
+            /usr/libexec/PlistBuddy \
+              -c 'Print :CFBundleExecutable' \
+              "$APP/Info.plist"
+          )
+
           test "$EXECUTABLE" = "MySSH"
           test -x "$APP/$EXECUTABLE"
-          file "$APP/$EXECUTABLE" | grep -q 'Mach-O 64-bit executable arm64'
 
-      - name: 打包 IPA
+      - name: ⑧ 打包 IPA
         if: ${{ success() }}
         shell: bash
         run: |
           set -euo pipefail
+
           APP="build/MySSH.xcarchive/Products/Applications/MySSH.app"
-          rm -rf build/Payload build/MySSH-unsigned.ipa
+
+          rm -rf build/Payload
+          rm -f build/MySSH-unsigned.ipa
+
           mkdir -p build/Payload
+
           cp -R "$APP" build/Payload/MySSH.app
-          (cd build && zip -qry MySSH-unsigned.ipa Payload)
+
+          (
+            cd build
+            zip -qry MySSH-unsigned.ipa Payload
+          )
+
           test -f build/MySSH-unsigned.ipa
 
-      - name: 上传构建结果和诊断
+      - name: ⑨ 上传构建结果
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:

@@ -1,6 +1,0 @@
-MySSH 一键构建包
-
-把本目录全部内容放到 GitHub 仓库根目录即可。
-GitHub Actions -> Build MySSH -> Run workflow。
-构建时会自动生成 Assets.xcassets/AppIcon.appiconset，并把刚才生成的图标打进 App。
-成功后下载 MySSH-unsigned-IPA artifact。

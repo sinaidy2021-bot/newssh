@@ -11,327 +11,59 @@ jobs:
     runs-on: macos-15
 
     steps:
-
-      # ============================================================
-      # 1. 拉取代码
-      # ============================================================
-      - name: ① 拉取项目代码
+      - name: 拉取项目
         uses: actions/checkout@v4
 
-      # ============================================================
-      # 2. 初始化诊断目录
-      #
-      # 重要：
-      # diagnostics/ 永远不放进 build/
-      # 防止后面的 rm -rf build 把诊断资料删除
-      # ============================================================
-      - name: ② 初始化中文错误诊断系统
+      - name: 安装 XcodeGen
+        run: brew install xcodegen
+
+      - name: 生成 AppIcon
         shell: bash
         run: |
-          set +e
-
-          rm -rf diagnostics
-          mkdir -p diagnostics
-
-          echo "MySSH 中文构建诊断系统已启动。" \
-            | tee diagnostics/00-诊断系统状态.txt
-
-          date >> diagnostics/00-诊断系统状态.txt
-
-      # ============================================================
-      # 3. 收集系统环境
-      # ============================================================
-      - name: ③ 收集 Xcode 和系统环境
-        shell: bash
-        run: |
-          set +e
-
-          {
-            echo "=================================================="
-            echo "MySSH 构建环境"
-            echo "=================================================="
-            echo ""
-
-            echo "【时间】"
-            date
-
-            echo ""
-            echo "【macOS】"
-            sw_vers
-
-            echo ""
-            echo "【Xcode】"
-            xcodebuild -version
-
-            echo ""
-            echo "【Swift】"
-            swift --version
-
-            echo ""
-            echo "【Xcode 路径】"
-            xcode-select -p
-
-            echo ""
-            echo "【iOS SDK】"
-            xcrun --sdk iphoneos --show-sdk-version
-
-            echo ""
-            echo "【Git Commit】"
-            git rev-parse HEAD
-
-            echo ""
-            echo "【Git Branch】"
-            git branch --show-current
-
-          } > diagnostics/01-构建环境.txt 2>&1
-
-      # ============================================================
-      # 4. 检查项目文件
-      # ============================================================
-      - name: ④ 检查项目文件
-        shell: bash
-        run: |
-          set +e
-
-          {
-            echo "=================================================="
-            echo "MySSH 项目文件"
-            echo "=================================================="
-            echo ""
-
-            find . \
-              -not -path "./.git/*" \
-              -not -path "./build/*" \
-              -not -path "./diagnostics/*" \
-              -print | sort
-
-            echo ""
-            echo "=================================================="
-            echo "Swift 文件"
-            echo "=================================================="
-
-            find . \
-              -not -path "./.git/*" \
-              -not -path "./build/*" \
-              -not -path "./diagnostics/*" \
-              -name "*.swift" \
-              -print | sort
-
-          } > diagnostics/02-项目文件.txt 2>&1
-
-      # ============================================================
-      # 5. 检查 project.yml
-      # ============================================================
-      - name: ⑤ 检查 project.yml
-        shell: bash
-        run: |
-          set +e
-
-          {
-            echo "=================================================="
-            echo "project.yml"
-            echo "=================================================="
-            echo ""
-
-            if [ -f project.yml ]; then
-              cat project.yml
-            else
-              echo "错误：找不到 project.yml"
-            fi
-
-          } > diagnostics/03-project.yml.txt 2>&1
-
-      # ============================================================
-      # 6. 安装 XcodeGen
-      # ============================================================
-      - name: ⑥ 安装 XcodeGen
-        shell: bash
-        run: |
-          set -o pipefail
-
-          brew install xcodegen \
-            2>&1 | tee diagnostics/04-XcodeGen安装.log
-
-      # ============================================================
-      # 7. 自动生成 AppIcon
-      # ============================================================
-      - name: ⑦ 自动生成 AppIcon
-        shell: bash
-        run: |
-          set -o pipefail
-
-          ICON="AppIconSource.png"
-
-          if [ ! -f "$ICON" ]; then
-            echo "错误：找不到 AppIconSource.png"
-            exit 1
-          fi
-
+          set -euo pipefail
+          test -f AppIconSource.png
           rm -rf Assets.xcassets
-
-          mkdir -p \
-            Assets.xcassets/AppIcon.appiconset
-
-          cp "$ICON" \
-            Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png
+          mkdir -p Assets.xcassets/AppIcon.appiconset
+          cp AppIconSource.png Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png
 
           cat > Assets.xcassets/Contents.json <<'JSON'
-          {
-            "info": {
-              "author": "xcode",
-              "version": 1
-            }
-          }
+          {"info":{"author":"xcode","version":1}}
           JSON
 
           cat > Assets.xcassets/AppIcon.appiconset/Contents.json <<'JSON'
           {
-            "images": [
-              {
-                "filename": "AppIcon-1024.png",
-                "idiom": "universal",
-                "platform": "ios",
-                "size": "1024x1024"
-              }
-            ],
-            "info": {
-              "author": "xcode",
-              "version": 1
-            }
+            "images": [{
+              "filename": "AppIcon-1024.png",
+              "idiom": "universal",
+              "platform": "ios",
+              "size": "1024x1024"
+            }],
+            "info": {"author":"xcode","version":1}
           }
           JSON
 
-          WIDTH=$(sips -g pixelWidth "$ICON" \
-            | awk '/pixelWidth/ {print $2}')
-
-          HEIGHT=$(sips -g pixelHeight "$ICON" \
-            | awk '/pixelHeight/ {print $2}')
-
-          {
-            echo "图标宽度：$WIDTH"
-            echo "图标高度：$HEIGHT"
-          } | tee diagnostics/05-AppIcon检查.txt
-
+          WIDTH=$(sips -g pixelWidth AppIconSource.png | awk '/pixelWidth/ {print $2}')
+          HEIGHT=$(sips -g pixelHeight AppIconSource.png | awk '/pixelHeight/ {print $2}')
           test "$WIDTH" = "1024"
           test "$HEIGHT" = "1024"
 
-      # ============================================================
-      # 8. 生成 Xcode 工程
-      # ============================================================
-      - name: ⑧ 生成 Xcode 工程
+      - name: 生成 Xcode 项目
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
+          rm -rf MySSH.xcodeproj
+          xcodegen generate
+          test -f MySSH.xcodeproj/project.pbxproj
 
-          xcodegen generate \
-            2>&1 | tee diagnostics/06-XcodeGen生成.log
-
-      # ============================================================
-      # 9. 检查生成后的工程
-      # ============================================================
-      - name: ⑨ 检查 Xcode 工程
-        shell: bash
-        run: |
-          set +e
-
-          {
-            echo "=================================================="
-            echo "Xcode 工程检查"
-            echo "=================================================="
-            echo ""
-
-            if [ -f MySSH.xcodeproj/project.pbxproj ]; then
-              echo "✓ MySSH.xcodeproj 已生成"
-            else
-              echo "✗ MySSH.xcodeproj 未生成"
-            fi
-
-            echo ""
-            echo "【Targets / Schemes】"
-
-            xcodebuild \
-              -project MySSH.xcodeproj \
-              -list
-
-          } > diagnostics/07-Xcode工程检查.txt 2>&1
-
-      # ============================================================
-      # 10. 检查 Info.plist 是否被 sources 重复加入
-      #
-      # 专门防止你刚才遇到的：
-      # Multiple commands produce Info.plist
-      # ============================================================
-      - name: ⑩ 检查 Info.plist 重复问题
-        shell: bash
-        run: |
-          set +e
-
-          {
-            echo "=================================================="
-            echo "Info.plist 重复检查"
-            echo "=================================================="
-            echo ""
-
-            echo "【project.yml 中 Info.plist 配置】"
-
-            grep -n \
-              -E "INFOPLIST_FILE|GENERATE_INFOPLIST_FILE|Info.plist" \
-              project.yml 2>/dev/null
-
-            echo ""
-            echo "【工程中所有 Info.plist】"
-
-            find . \
-              -not -path "./.git/*" \
-              -not -path "./build/*" \
-              -not -path "./diagnostics/*" \
-              -name "Info.plist" \
-              -print
-
-            echo ""
-            echo "【project.pbxproj 中 Info.plist 引用】"
-
-            grep -n "Info.plist" \
-              MySSH.xcodeproj/project.pbxproj \
-              2>/dev/null
-
-          } > diagnostics/08-InfoPlist检查.txt 2>&1
-
-      # ============================================================
-      # 11. 解析 Swift Package
-      # ============================================================
-      - name: ⑪ 解析 Swift Package 依赖
-        shell: bash
-        run: |
-          set -o pipefail
-
-          xcodebuild \
-            -resolvePackageDependencies \
-            -project MySSH.xcodeproj \
-            -scheme MySSH \
-            2>&1 | tee diagnostics/09-SwiftPackage依赖.log
-
-      # ============================================================
-      # 12. 真正构建
-      #
-      # 注意：
-      # build/ 可以随便删除
-      # diagnostics/ 绝对不会被删除
-      # ============================================================
-      - name: ⑫ Archive 构建
+      - name: 构建 Archive
         id: archive
         shell: bash
         run: |
           set +e
+          rm -rf build diagnostics
+          mkdir -p build diagnostics
+
           set -o pipefail
-
-          rm -rf build
-          mkdir -p build
-
-          echo "=================================================="
-          echo "开始 Xcode Archive"
-          echo "=================================================="
-
           xcodebuild \
             -project MySSH.xcodeproj \
             -scheme MySSH \
@@ -341,509 +73,136 @@ jobs:
             -archivePath build/MySSH.xcarchive \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            archive \
-            2>&1 | tee diagnostics/10-xcodebuild完整日志.log
+            archive 2>&1 | tee build/xcodebuild.log >/dev/null
 
           STATUS=${PIPESTATUS[0]}
-
-          echo "$STATUS" > diagnostics/11-xcodebuild退出代码.txt
-
-          echo ""
-          echo "Xcode Exit Code: $STATUS"
-
+          echo "$STATUS" > diagnostics/exit-code.txt
           exit "$STATUS"
 
-      # ============================================================
-      # 13. 核心：中文错误提取
-      #
-      # 不管 Archive 成功还是失败，都执行
-      # ============================================================
-      - name: ⑬ 中文错误提取与自动分析
-        if: always()
+      - name: 生成中文根因诊断
+        if: ${{ always() }}
         shell: bash
         run: |
           set +e
-
-          LOG="diagnostics/10-xcodebuild完整日志.log"
-          REPORT="diagnostics/12-中文错误诊断与解决建议.txt"
-
-          EXIT_CODE="未知"
-
-          if [ -f diagnostics/11-xcodebuild退出代码.txt ]; then
-            EXIT_CODE=$(cat diagnostics/11-xcodebuild退出代码.txt)
-          fi
+          LOG="build/xcodebuild.log"
+          OUT="diagnostics/中文错误诊断.txt"
+          STATUS="$(cat diagnostics/exit-code.txt 2>/dev/null || echo 1)"
 
           {
-            echo "============================================================"
-            echo "                 MySSH 中文错误诊断报告"
-            echo "============================================================"
-            echo ""
-
-            echo "【构建退出代码】"
-            echo "$EXIT_CODE"
-            echo ""
-
-            echo "============================================================"
-            echo "【一、最终判断】"
-            echo "============================================================"
-            echo ""
-
-            if [ "$EXIT_CODE" = "0" ]; then
-              echo "✓ Xcode Archive 构建成功。"
+            echo "MySSH 构建诊断"
+            echo "=============================="
+            if [ "$STATUS" = "0" ]; then
+              echo "结果：✅ 构建成功"
             else
-              echo "✗ Xcode Archive 构建失败。"
-              echo "下面开始自动提取真正错误。"
+              echo "结果：❌ 构建失败"
             fi
-
-            echo ""
-
-            echo "============================================================"
-            echo "【二、真正的 error】"
-            echo "============================================================"
-            echo ""
+            echo "退出代码：$STATUS"
+            echo
+            echo "【真正错误】"
 
             if [ -f "$LOG" ]; then
-
-              ERRORS=$(grep -n \
-                -E "error:|fatal error:" \
-                "$LOG" 2>/dev/null)
+              ERRORS=$(grep -E '(^|/)[^[:space:]:]+\.(swift|m|mm|c|cpp):[0-9]+:[0-9]+: (error|fatal error):' "$LOG" 2>/dev/null \
+                | sed -E 's#^[0-9]+:##' \
+                | sed -E 's/^[[:space:]]+//' \
+                | awk '!seen[$0]++' \
+                | head -n 8)
 
               if [ -n "$ERRORS" ]; then
-                echo "$ERRORS" | tail -n 100
+                N=0
+                while IFS= read -r line; do
+                  [ -z "$line" ] && continue
+                  N=$((N+1))
+                  echo "$N. $line"
+                done <<< "$ERRORS"
               else
-                echo "没有发现普通 error: / fatal error:。"
+                LINKER=$(grep -E 'clang: error:|ld: error:|Undefined symbols for architecture|duplicate symbol|No such module' "$LOG" 2>/dev/null \
+                  | sed -E 's/^[0-9]+://' \
+                  | sed -E 's/^[[:space:]]+//' \
+                  | awk '!seen[$0]++' \
+                  | head -n 8)
+                if [ -n "$LINKER" ]; then
+                  echo "$LINKER"
+                else
+                  if grep -q '\*\* ARCHIVE FAILED \*\*' "$LOG" 2>/dev/null; then
+                    echo "未捕获到具体 Swift error。Archive 阶段失败，请检查原始日志。"
+                  else
+                    echo "未发现编译器错误。失败可能发生在项目生成、归档验证或打包阶段。"
+                  fi
+                fi
               fi
-
             else
-              echo "错误：没有找到 xcodebuild 完整日志。"
+              echo "没有找到 Xcode 构建日志。"
             fi
 
-            echo ""
-
-            echo "============================================================"
-            echo "【三、Archive / Build 失败信息】"
-            echo "============================================================"
-            echo ""
-
+            echo
+            echo "【自动解决建议】"
             if [ -f "$LOG" ]; then
-
-              grep -n -E \
-                "BUILD FAILED|ARCHIVE FAILED|Command .* failed|Multiple commands produce|CodeSign|PhaseScriptExecution" \
-                "$LOG" 2>/dev/null \
-                | tail -n 100
-
-            else
-              echo "没有完整日志。"
-            fi
-
-            echo ""
-
-            echo "============================================================"
-            echo "【四、重复文件错误】"
-            echo "============================================================"
-            echo ""
-
-            if [ -f "$LOG" ] && \
-              grep -q "Multiple commands produce" "$LOG"; then
-
-              echo "发现：Multiple commands produce"
-              echo ""
-              echo "中文解释："
-              echo "同一个输出文件被两个或多个构建步骤同时生成。"
-              echo ""
-              echo "当前最可能的问题："
-              echo "Info.plist 同时被作为普通 source/resource 加入，"
-              echo "又被 INFOPLIST_FILE 作为正式 Info.plist 处理。"
-              echo ""
-              echo "解决方案："
-              echo "1. 在 project.yml 的 sources.excludes 中排除 Info.plist。"
-              echo "2. 排除 build/**。"
-              echo "3. 保留 INFOPLIST_FILE: Info.plist。"
-              echo "4. GENERATE_INFOPLIST_FILE 必须保持 NO。"
-
-            else
-              echo "没有发现 Multiple commands produce。"
-            fi
-
-            echo ""
-
-            echo "============================================================"
-            echo "【五、Swift 编译错误】"
-            echo "============================================================"
-            echo ""
-
-            if [ -f "$LOG" ]; then
-
-              grep -n -E \
-                "SwiftCompile|CompileSwift|EmitSwiftModule|SwiftDriver" \
-                "$LOG" 2>/dev/null \
-                | tail -n 100
-
-              echo ""
-              echo "如果上面有 error，请结合 error: 行一起判断。"
-
-            fi
-
-            echo ""
-
-            echo "============================================================"
-            echo "【六、Swift Package / 依赖错误】"
-            echo "============================================================"
-            echo ""
-
-            if [ -f "$LOG" ]; then
-
-              grep -n -E \
-                "package|Package|dependency|Dependency|SwiftPM|Fetching|Resolving|failed to clone|could not resolve" \
-                "$LOG" 2>/dev/null \
-                | tail -n 100
-
-            fi
-
-            echo ""
-
-            echo "============================================================"
-            echo "【七、代码签名错误】"
-            echo "============================================================"
-            echo ""
-
-            if [ -f "$LOG" ]; then
-
-              SIGN_ERRORS=$(grep -n -E \
-                "CodeSign|codesign|Provisioning|provisioning|Signing|signing" \
-                "$LOG" 2>/dev/null \
-                | tail -n 50)
-
-              if [ -n "$SIGN_ERRORS" ]; then
-                echo "$SIGN_ERRORS"
-              else
-                echo "没有发现明显代码签名错误。"
+              if grep -q "cannot find .* in scope" "$LOG"; then
+                echo "→ 存在未定义的变量、函数或类型：检查名称是否拼写正确，以及对应声明是否被删除。"
               fi
-
-            fi
-
-            echo ""
-
-            echo "============================================================"
-            echo "【八、Info.plist 错误】"
-            echo "============================================================"
-            echo ""
-
-            if [ -f "$LOG" ]; then
-
-              PLIST_ERRORS=$(grep -n -E \
-                "Info.plist|INFOPLIST|ProcessInfoPlistFile" \
-                "$LOG" 2>/dev/null \
-                | tail -n 100)
-
-              if [ -n "$PLIST_ERRORS" ]; then
-                echo "$PLIST_ERRORS"
-              else
-                echo "没有发现明显 Info.plist 错误。"
+              if grep -q "extra argument" "$LOG"; then
+                echo "→ 调用参数多于函数/视图定义：删除多余参数，或让被调用对象提供该参数。"
               fi
-
-            fi
-
-            echo ""
-
-            echo "============================================================"
-            echo "【九、资源 / AppIcon 错误】"
-            echo "============================================================"
-            echo ""
-
-            if [ -f "$LOG" ]; then
-
-              grep -n -E \
-                "actool|Assets.xcassets|AppIcon|asset catalog|assetcatalog" \
-                "$LOG" 2>/dev/null \
-                | tail -n 100
-
-            fi
-
-            echo ""
-
-            echo "============================================================"
-            echo "【十、Archive 文件状态】"
-            echo "============================================================"
-            echo ""
-
-            APP="build/MySSH.xcarchive/Products/Applications/MySSH.app"
-
-            if [ -d "$APP" ]; then
-              echo "✓ MySSH.app 已生成"
-
-              if [ -f "$APP/Info.plist" ]; then
-                echo "✓ App/Info.plist 已生成"
-              else
-                echo "✗ App/Info.plist 缺失"
+              if grep -q "missing argument" "$LOG"; then
+                echo "→ 调用缺少参数：按函数/初始化器定义补齐参数。"
               fi
-
-            else
-              echo "✗ MySSH.app 没有生成"
-            fi
-
-            if [ -f build/MySSH-unsigned.ipa ]; then
-              echo "✓ IPA 已生成"
-            else
-              echo "✗ IPA 没有生成"
-            fi
-
-            echo ""
-
-            echo "============================================================"
-            echo "【十一、自动解决建议】"
-            echo "============================================================"
-            echo ""
-
-            if [ -f "$LOG" ]; then
-
+              if grep -q "has no member" "$LOG"; then
+                echo "→ 调用了类型不存在的属性或方法：检查成员名称及当前类型定义。"
+              fi
+              if grep -q "ambiguous use" "$LOG"; then
+                echo "→ 调用存在歧义：检查重复声明、重载或类型推断。"
+              fi
+              if grep -q "No such module" "$LOG"; then
+                echo "→ 缺少模块：检查 project.yml 的依赖声明、产品名和 Swift Package 版本。"
+              fi
               if grep -q "Multiple commands produce" "$LOG"; then
-
-                echo "【问题类型】文件重复生成"
-                echo ""
-                echo "【建议】"
-                echo "修改 project.yml："
-                echo ""
-                echo "sources:"
-                echo "  - path: ."
-                echo "    excludes:"
-                echo "      - Info.plist"
-                echo "      - build/**"
-                echo "      - diagnostics/**"
-                echo ""
-                echo "同时保持："
-                echo ""
-                echo "INFOPLIST_FILE: Info.plist"
-                echo "GENERATE_INFOPLIST_FILE: \"NO\""
-                echo ""
-
-              elif grep -q -E "error:.*cannot find.*in scope|error:.*Cannot find" "$LOG"; then
-
-                echo "【问题类型】Swift 找不到类型、变量或函数"
-                echo ""
-                echo "【建议】"
-                echo "1. 检查对应 Swift 文件是否加入 target。"
-                echo "2. 检查名称拼写。"
-                echo "3. 检查 import。"
-                echo "4. 检查文件之间是否存在重复定义。"
-                echo ""
-
-              elif grep -q -E "error:.*no such module" "$LOG"; then
-
-                echo "【问题类型】找不到 Swift Package / Module"
-                echo ""
-                echo "【建议】"
-                echo "1. 检查 project.yml 的 packages。"
-                echo "2. 检查 target dependencies。"
-                echo "3. 检查 package product 名称。"
-                echo "4. 检查 Swift Package 是否成功解析。"
-                echo ""
-
-              elif grep -q -E "error:.*ambiguous|Invalid redeclaration|invalid redeclaration" "$LOG"; then
-
-                echo "【问题类型】代码重复定义"
-                echo ""
-                echo "【建议】"
-                echo "检查是否存在："
-                echo "1. 两个相同 struct/class。"
-                echo "2. 同名函数重复。"
-                echo "3. 同一个文件被 sources 加入两次。"
-                echo "4. 旧版大文件和新版分文件同时存在。"
-                echo ""
-
-              elif grep -q -E "error:.*type.*has no member|error:.*value of type" "$LOG"; then
-
-                echo "【问题类型】Swift 类型/API 不匹配"
-                echo ""
-                echo "【建议】"
-                echo "检查调用对象实际类型，以及当前 Xcode/iOS SDK API。"
-                echo "不要直接把其他项目的 Swift 代码原样混入当前工程。"
-                echo ""
-
-              elif grep -q -E "error:.*concurrency|Sendable|actor-isolated|main actor" "$LOG"; then
-
-                echo "【问题类型】Swift 并发 / Actor 隔离"
-                echo ""
-                echo "【建议】"
-                echo "检查 @MainActor、Task、Sendable 和 NIO EventLoop 之间的数据传递。"
-                echo "不要为了消除错误直接删除 @MainActor。"
-                echo ""
-
-              elif grep -q -E "CodeSign|Provisioning|provisioning" "$LOG"; then
-
-                echo "【问题类型】代码签名"
-                echo ""
-                echo "【建议】"
-                echo "当前 workflow 使用 CODE_SIGNING_ALLOWED=NO。"
-                echo "如果仍然出现签名错误，需要检查 project.yml 的签名设置。"
-                echo ""
-
-              elif grep -q -E "failed to clone|could not resolve|dependency" "$LOG"; then
-
-                echo "【问题类型】Swift Package 依赖"
-                echo ""
-                echo "【建议】"
-                echo "检查网络、Package URL、版本范围以及 Package product 名称。"
-                echo ""
-
-              else
-
-                echo "【问题类型】暂未自动识别"
-                echo ""
-                echo "【建议】"
-                echo "请查看："
-                echo "1. 本报告中的 error: 行"
-                echo "2. error-context.txt"
-                echo "3. xcodebuild 完整日志"
-                echo "4. Archive 状态"
-                echo ""
-                echo "把本报告交给我，我可以继续定位具体根因。"
-
+                echo "→ 同一个文件被重复处理：检查 sources/resources 与 INFOPLIST_FILE 等配置是否重复。"
               fi
-
-            else
-              echo "无法进行自动分析，因为 Xcode 完整日志不存在。"
+              if grep -q "Signing requires a development team" "$LOG" || grep -q "requires a provisioning profile" "$LOG"; then
+                echo "→ 出现签名配置错误：当前工作流使用无签名 Archive；检查是否有 Target 强制开启签名。"
+              fi
+              if grep -q "Command PhaseScriptExecution failed" "$LOG"; then
+                echo "→ 构建脚本失败：检查对应 Run Script 阶段的实际错误。"
+              fi
             fi
+            echo
+            echo "原始 Xcode 日志已单独保存为 build/xcodebuild.log，不在本报告中展开。"
+          } > "$OUT"
 
-            echo ""
+          cat "$OUT"
 
-            echo "============================================================"
-            echo "【十二、诊断资料说明】"
-            echo "============================================================"
-            echo ""
-            echo "本次构建的所有诊断资料都位于 diagnostics/。"
-            echo ""
-            echo "最重要的文件："
-            echo ""
-            echo "12-中文错误诊断与解决建议.txt"
-            echo "10-xcodebuild完整日志.log"
-            echo "08-InfoPlist检查.txt"
-            echo "09-SwiftPackage依赖.log"
-            echo ""
-            echo "============================================================"
-            echo "报告结束"
-            echo "============================================================"
-
-          } > "$REPORT"
-
-          echo ""
-          cat "$REPORT"
-
-      # ============================================================
-      # 14. Archive 验证
-      # ============================================================
-      - name: ⑭ 验证 Archive
-        if: success()
+      - name: 验证 Archive
+        if: ${{ success() }}
         shell: bash
         run: |
           set -euo pipefail
-
           APP="build/MySSH.xcarchive/Products/Applications/MySSH.app"
-
           test -d "$APP"
-
           test -f "$APP/Info.plist"
+          EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
+          test "$EXECUTABLE" = "MySSH"
+          test -x "$APP/$EXECUTABLE"
+          file "$APP/$EXECUTABLE" | grep -q 'Mach-O 64-bit executable arm64'
 
-          EXECUTABLE=$(
-            /usr/libexec/PlistBuddy \
-            -c "Print :CFBundleExecutable" \
-            "$APP/Info.plist"
-          )
-
-          echo "Executable: $EXECUTABLE"
-
-          test -f "$APP/$EXECUTABLE"
-
-          file "$APP/$EXECUTABLE"
-
-          file "$APP/$EXECUTABLE" \
-            | grep -q "Mach-O 64-bit executable arm64"
-
-      # ============================================================
-      # 15. 制作 IPA
-      # ============================================================
-      - name: ⑮ 打包 IPA
-        if: success()
+      - name: 打包 IPA
+        if: ${{ success() }}
         shell: bash
         run: |
           set -euo pipefail
-
           APP="build/MySSH.xcarchive/Products/Applications/MySSH.app"
-
-          rm -rf build/Payload
-          rm -f build/MySSH-unsigned.ipa
-
+          rm -rf build/Payload build/MySSH-unsigned.ipa
           mkdir -p build/Payload
-
           cp -R "$APP" build/Payload/MySSH.app
-
-          (
-            cd build
-            zip -qry MySSH-unsigned.ipa Payload
-          )
-
+          (cd build && zip -qry MySSH-unsigned.ipa Payload)
           test -f build/MySSH-unsigned.ipa
 
-          ls -lh build/MySSH-unsigned.ipa
-
-      # ============================================================
-      # 16. 最终状态
-      # ============================================================
-      - name: ⑯ 最终中文构建结果
-        if: always()
-        shell: bash
-        run: |
-          set +e
-
-          {
-            echo "=================================================="
-            echo "MySSH 最终构建结果"
-            echo "=================================================="
-            echo ""
-
-            if [ -f build/MySSH-unsigned.ipa ]; then
-              echo "✓ IPA：构建成功"
-            else
-              echo "✗ IPA：未生成"
-            fi
-
-            if [ -d build/MySSH.xcarchive ]; then
-              echo "✓ Archive：生成成功"
-            else
-              echo "✗ Archive：未生成"
-            fi
-
-            if [ -f diagnostics/10-xcodebuild完整日志.log ]; then
-              echo "✓ Xcode 完整日志：已保存"
-            else
-              echo "✗ Xcode 完整日志：缺失"
-            fi
-
-            if [ -f diagnostics/12-中文错误诊断与解决建议.txt ]; then
-              echo "✓ 中文错误报告：已生成"
-            else
-              echo "✗ 中文错误报告：缺失"
-            fi
-
-            echo ""
-            echo "所有诊断资料将在下一步骤上传。"
-
-          } | tee diagnostics/13-最终构建结果.txt
-
-      # ============================================================
-      # 17. 最重要：
-      #     无论成功、失败、Archive 失败、Swift 失败
-      #     都上传 diagnostics
-      # ============================================================
-      - name: ⑰ 上传完整中文诊断资料
-        if: always()
+      - name: 上传构建结果和诊断
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: MySSH-中文错误诊断完整资料
+          name: MySSH-构建结果与简洁诊断
           path: |
-            diagnostics/
+            diagnostics/中文错误诊断.txt
             build/MySSH-unsigned.ipa
             build/xcodebuild.log
           if-no-files-found: warn
-          retention-days: 14

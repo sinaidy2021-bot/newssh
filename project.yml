@@ -8,18 +8,25 @@ targets:
     platform: iOS
     deploymentTarget: "17.0"
     sources: ["."]
-    excludes: ["README.md", "一键构建说明.txt", ".github"]
+    # 将 Info.plist 加入排除列表，防止被当成普通资源文件
+    excludes: ["README.md", "一键构建说明.txt", ".github", "Info.plist"]
     info:
-      path: Info.plist
-      properties: {}
+      properties:
+        CFBundleDisplayName: "MySSH"
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.myssh.app
-        INFOPLIST_FILE: Info.plist
         SWIFT_VERSION: "5.0"
         CODE_SIGNING_ALLOWED: NO
-    dependencies:
-      - package: Citadel
+        # 强制允许 Xcode 自动生成 plist，解决冲突
+        GENERATE_INFOPLIST_FILE: YES
+dependencies:
+  - package: Citadel
 packages:
   Citadel:
     url: https://github.com/orlandos-nl/Citadel

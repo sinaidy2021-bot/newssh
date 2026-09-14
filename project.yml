@@ -1,4 +1,3 @@
-id: uhcm1t
 name: MySSH
 
 options:
@@ -23,7 +22,6 @@ targets:
     type: application
     platform: iOS
     deploymentTarget: "17.0"
-
     sources:
       - path: .
         excludes:
@@ -33,14 +31,13 @@ targets:
           - "diagnostics/**"
           - "DerivedData/**"
           - "Info.plist"
+          - "README.md"
           - "project.yml"
           - "project.yaml"
-          - "README.md"
           - "*.zip"
           - "*.log"
           - "打包说明.txt"
           - "AppIconSource.png"
-
     resources:
       - path: Assets.xcassets
 
@@ -56,11 +53,9 @@ packages:
   Citadel:
     url: https://github.com/orlandos-nl/Citadel.git
     branch: main
-
   swift-nio:
     url: https://github.com/apple/swift-nio.git
     from: "2.81.0"
-
   swift-nio-ssh:
     url: https://github.com/Wellz26/swift-nio-ssh.git
     from: "0.3.4"

@@ -13,6 +13,7 @@ struct HistoryItem: Identifiable {
 class SSHSession: ObservableObject {
     @Published var history: [HistoryItem] = []
     @Published var isConnected = false
+    @Published var isExecuting = false
     
     var host = ""
     var port = 22
@@ -20,13 +21,11 @@ class SSHSession: ObservableObject {
     var password = ""
     
     private var client: SSHClient?
-    // 直接持有 ExecCommandStream 用于写入标准输入
-    private var execStream: ExecCommandStream?
 
     func connect() {
         Task {
             do {
-                // 1. 握手认证
+                // 1. 发起连接
                 let client = try await SSHClient.connect(
                     host: self.host,
                     port: self.port,
@@ -36,30 +35,7 @@ class SSHSession: ObservableObject {
                 )
                 self.client = client
                 self.isConnected = true
-                self.history.append(HistoryItem(command: "连接成功", output: "已连接到 \(self.host)，交互通道已就绪..."))
-
-                // 2. 开启执行流，启动交互 Shell
-                let stream = try await client.executeCommandStream("/bin/sh -i")
-                self.execStream = stream
-
-                // 3. 异步循环读取远端回显和执行结果
-                for try await chunk in stream {
-                    let str = String(buffer: chunk)
-                    let clean = str.replacingOccurrences(of: "\r", with: "")
-                    
-                    if !clean.isEmpty {
-                        if self.history.isEmpty {
-                            self.history.append(HistoryItem(command: "", output: clean))
-                        } else {
-                            let lastIndex = self.history.count - 1
-                            self.history[lastIndex].output += clean
-                            
-                            if self.history[lastIndex].output.count > 20000 {
-                                self.history[lastIndex].output = String(self.history[lastIndex].output.suffix(15000))
-                            }
-                        }
-                    }
-                }
+                self.history.append(HistoryItem(command: "连接成功", output: "已连接到 \(self.host)"))
             } catch {
                 self.history.append(HistoryItem(command: "连接失败", output: "\(error.localizedDescription)"))
                 self.isConnected = false
@@ -71,38 +47,44 @@ class SSHSession: ObservableObject {
         let trimmed = cmd.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return }
         
-        var buffer = ByteBufferAllocator().buffer(capacity: trimmed.utf8.count + 1)
-        buffer.writeString(trimmed + "\n")
-        
-        Task {
-            try? await self.execStream?.write(buffer)
+        guard let client = self.client else {
+            self.history.append(HistoryItem(command: trimmed, output: "未连接到服务器"))
+            return
         }
 
-        self.history.append(HistoryItem(command: trimmed, output: ""))
+        // 添加到本地历史
+        let itemIndex = self.history.count
+        self.history.append(HistoryItem(command: trimmed, output: "正在执行..."))
+        self.isExecuting = true
+
+        Task {
+            do {
+                // Citadel 0.7+ 单命令标准执行 API
+                let outputBuffer = try await client.executeCommand(trimmed)
+                let text = String(buffer: outputBuffer)
+                
+                self.history[itemIndex].output = text.isEmpty ? "(无输出)" : text
+            } catch {
+                self.history[itemIndex].output = "执行出错: \(error.localizedDescription)"
+            }
+            self.isExecuting = false
+        }
     }
 
     func sendCtrlC() {
-        var buffer = ByteBufferAllocator().buffer(capacity: 1)
-        buffer.writeBytes([0x03])
-        Task {
-            try? await self.execStream?.write(buffer)
-        }
+        // 单命令模式下无需发送控制字符
     }
 
     func sendTab() {
-        var buffer = ByteBufferAllocator().buffer(capacity: 1)
-        buffer.writeBytes([0x09])
-        Task {
-            try? await self.execStream?.write(buffer)
-        }
+        // 单命令模式下无需补全控制
     }
 
     func disconnect() {
         Task {
-            self.execStream = nil
             try? await self.client?.close()
             self.client = nil
             self.isConnected = false
+            self.history.append(HistoryItem(command: "断开连接", output: "连接已关闭"))
         }
     }
 }

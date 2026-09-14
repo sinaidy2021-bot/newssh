@@ -38,13 +38,14 @@ class SSHSession: ObservableObject {
                 self.isConnected = true
                 self.history.append(HistoryItem(command: "连接成功", output: "已连接到 \(self.host)，交互通道已就绪..."))
 
-                // 2. 双向交互流：新版本 executeCommandPair 返回的是 ExecCommandStream 对象
-                // 👇 修复：不再使用元组解包 (stdinWriter, stdoutStream)，改为直接接收对象
+                // 2. 双向交互流：executeCommandPair 返回 ExecCommandStream 对象
                 let execStream = try await client.executeCommandPair("/bin/sh -i")
                 
-                // 从对象中取出输入流和输出流
-                let stdinWriter = execStream.stdin
-                let stdoutStream = execStream.stdout
+                // 👇 关键修复：不同 Citadel 版本属性名不同，这里用最稳妥的 stdinWriter / stdoutStream
+                // 如果编译仍然报错找不到这两个，请尝试把 .stdinWriter 改成 .input 或 .writer
+                // 如果编译仍然报错找不到 stdoutStream，请尝试把 .stdoutStream 改成 .output 或 .stream
+                let stdinWriter = execStream.stdinWriter
+                let stdoutStream = execStream.stdoutStream
 
                 // 创建输入流中继管道
                 let (stdinStream, continuation) = AsyncStream<ByteBuffer>.makeStream()

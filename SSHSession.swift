@@ -38,9 +38,13 @@ class SSHSession: ObservableObject {
                 self.isConnected = true
                 self.history.append(HistoryItem(command: "连接成功", output: "已连接到 \(self.host)，交互通道已就绪..."))
 
-                // 2. 双向交互流：executeCommandPair 返回 (in: TTYStdinWriter/管道, out: AsyncStream)
-                // 默认使用交互式 shell
-                let (stdinWriter, stdoutStream) = try await client.executeCommandPair("/bin/sh -i")
+                // 2. 双向交互流：新版本 executeCommandPair 返回的是 ExecCommandStream 对象
+                // 👇 修复：不再使用元组解包 (stdinWriter, stdoutStream)，改为直接接收对象
+                let execStream = try await client.executeCommandPair("/bin/sh -i")
+                
+                // 从对象中取出输入流和输出流
+                let stdinWriter = execStream.stdin
+                let stdoutStream = execStream.stdout
 
                 // 创建输入流中继管道
                 let (stdinStream, continuation) = AsyncStream<ByteBuffer>.makeStream()
